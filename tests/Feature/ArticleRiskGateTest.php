@@ -114,6 +114,20 @@ class ArticleRiskGateTest extends TestCase
         }
     }
 
+    public function test_internal_evidence_marker_blocks_publication_without_a_dictionary_rule(): void
+    {
+        $article = $this->createArticle(['content' => '公开正文不应包含 [K1]。']);
+
+        try {
+            $this->gate()->check($article, 'publish');
+            $this->fail('Expected the internal evidence marker to stop the risk gate.');
+        } catch (ArticleRiskGateException $exception) {
+            $this->assertSame('blocked', $exception->riskStatus);
+            $this->assertSame('internal_evidence_marker', $exception->scan->matches[0]['category'] ?? null);
+            $this->assertFalse($exception->scan->is_overridden);
+        }
+    }
+
     public function test_fresh_overridden_warning_can_pass_without_repeating_the_reason(): void
     {
         SensitiveWord::query()->create(['word' => 'review me']);

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GEOFlow 文章写作"
+  short_description: "按 GEO 证据页规范生成标题、文章和发布前核验清单"
+  default_prompt: "使用 $write-geoflow-articles 按证据页规范生成 GEOFlow 文章标题、正文与发布前核验清单。"

@@ -9,15 +9,15 @@ final class ArticleContentPromptRenderer
      */
     public function renderForEditor(string $title, string $keyword, ?string $promptContent, string $knowledgeContext = ''): string
     {
-        return $this->render($title, $keyword, $promptContent, $knowledgeContext, false);
+        return $this->render($title, $keyword, $promptContent, $knowledgeContext);
     }
 
     /**
-     * Worker 保留证据编号，供后续自动化审核和来源追踪。
+     * Worker 保留内部证据上下文，但不把证据编号写入公开成稿。
      */
     public function renderForWorker(string $title, string $keyword, ?string $promptContent, string $knowledgeContext = ''): string
     {
-        return $this->render($title, $keyword, $promptContent, $knowledgeContext, true);
+        return $this->render($title, $keyword, $promptContent, $knowledgeContext);
     }
 
     /**
@@ -28,7 +28,6 @@ final class ArticleContentPromptRenderer
         string $keyword,
         ?string $promptContent,
         string $knowledgeContext,
-        bool $includeEvidenceIds,
     ): string {
         $prompt = trim((string) $promptContent);
         $isFallbackPrompt = false;
@@ -52,7 +51,7 @@ final class ArticleContentPromptRenderer
         }
 
         $finalInstructions = array_values(array_filter([
-            $this->knowledgeAttributionInstruction($renderedPrompt, $knowledgeContext, $includeEvidenceIds),
+            $this->knowledgeAttributionInstruction($renderedPrompt, $knowledgeContext),
             $this->finalPromptInstruction($renderedPrompt),
         ], static fn (string $instruction): bool => trim($instruction) !== ''));
 
@@ -170,18 +169,10 @@ final class ArticleContentPromptRenderer
         return '请直接输出最终文章正文（Markdown），不要重复提示词、不要输出占位符。';
     }
 
-    private function knowledgeAttributionInstruction(string $prompt, string $knowledgeContext, bool $includeEvidenceIds): string
+    private function knowledgeAttributionInstruction(string $prompt, string $knowledgeContext): string
     {
         if (trim($knowledgeContext) === '') {
             return '';
-        }
-
-        if ($includeEvidenceIds) {
-            if ($this->isLikelyEnglishPrompt($prompt)) {
-                return 'Knowledge citation rule: when using facts, data, or business judgments from the reference knowledge, cite the evidence ID such as [K1] in the relevant sentence. If the evidence is insufficient, use cautious wording and do not invent sources or conclusions.';
-            }
-
-            return '知识库引用要求：涉及事实、数据或业务判断时，优先依据参考知识中的 [K1] 等证据编号，并在相关句子后标注证据编号；证据不足时不要编造来源或结论。';
         }
 
         if ($this->isLikelyEnglishPrompt($prompt)) {

@@ -144,6 +144,32 @@ class ArticleRiskScannerTest extends TestCase
         $this->assertSame(['warning', 'blocked'], array_column($result['matches'], 'severity'));
     }
 
+    public function test_internal_evidence_markers_are_always_blocked_across_public_fields(): void
+    {
+        $result = $this->scanner()->scan([
+            'excerpt' => '摘要【K2】',
+            'content' => '正文 [K1] 与（K3）。',
+            'meta_description' => '描述 (K4)',
+        ]);
+
+        $this->assertSame('blocked', $result['status']);
+        $this->assertSame(4, $result['match_count']);
+        $this->assertSame(['excerpt', 'content', 'meta_description'], array_column($result['matches'], 'field'));
+        $this->assertSame(
+            ['internal_evidence_marker', 'internal_evidence_marker', 'internal_evidence_marker'],
+            array_column($result['matches'], 'category')
+        );
+        $this->assertSame(['blocked', 'blocked', 'blocked'], array_column($result['matches'], 'severity'));
+    }
+
+    public function test_unwrapped_k_codes_are_not_treated_as_internal_evidence_markers(): void
+    {
+        $result = $this->scanner()->scan(['content' => '设备型号 K1 与 K20。']);
+
+        $this->assertSame('clean', $result['status']);
+        $this->assertSame(0, $result['match_count']);
+    }
+
     public function test_it_scans_the_visible_text_rendered_from_markdown_and_html_entities(): void
     {
         SensitiveWord::query()->create([

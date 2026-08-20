@@ -5,6 +5,7 @@ namespace App\Services\GeoFlow;
 use App\Models\Article;
 use App\Models\ArticleRiskScan;
 use App\Models\SensitiveWord;
+use App\Support\GeoFlow\InternalEvidenceMarker;
 use App\Support\Site\ArticleHtmlPresenter;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -14,7 +15,7 @@ use RuntimeException;
 
 class ArticleRiskScanner
 {
-    public const SCAN_ALGORITHM_VERSION = '4';
+    public const SCAN_ALGORITHM_VERSION = '5';
 
     public const MAX_CONTENT_CHARACTERS = 200000;
 
@@ -59,6 +60,26 @@ class ArticleRiskScanner
         $matches = [];
         $matchCount = 0;
         $status = 'clean';
+
+        foreach (self::FIELDS as $field) {
+            $internalMarkers = InternalEvidenceMarker::extract($normalizedContent[$field]);
+            if ($internalMarkers === []) {
+                continue;
+            }
+
+            $count = count($internalMarkers);
+            $matchCount += $count;
+            $status = 'blocked';
+            $matches[] = [
+                'word' => $internalMarkers[0],
+                'field' => $field,
+                'count' => $count,
+                'severity' => 'blocked',
+                'category' => 'internal_evidence_marker',
+                'suggestion' => '删除内部知识库证据编号后再发布。',
+                'snippet' => $internalMarkers[0],
+            ];
+        }
 
         foreach ($rules as $rule) {
             $normalizedWord = $this->normalize((string) $rule['word']);

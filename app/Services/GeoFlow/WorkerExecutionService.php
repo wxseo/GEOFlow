@@ -16,6 +16,7 @@ use App\Models\Task;
 use App\Models\Title;
 use App\Support\GeoFlow\ArticleWorkflow;
 use App\Support\GeoFlow\ImageUrlNormalizer;
+use App\Support\GeoFlow\InternalEvidenceMarker;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -88,7 +89,7 @@ class WorkerExecutionService
         $contentPrompt = $this->buildContentPrompt((string) $titleRow->title, $keyword, $prompt?->content, $knowledgeContext);
         $generation = $this->generateContentWithModelSelection($task, $contentPrompt);
         $aiModel = $generation['model'];
-        $generatedContent = $generation['content'];
+        $generatedContent = InternalEvidenceMarker::remove($generation['content']);
         $imageResult = $this->insertTaskImagesIntoContent($task, $generatedContent);
         $content = $imageResult['content'];
         $selectedImages = $imageResult['images'];

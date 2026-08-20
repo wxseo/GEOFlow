@@ -52,10 +52,12 @@ class WorkerExecutionServicePromptTest extends TestCase
         $this->assertStringContainsString('- Article title: What is AI CRM?', $prompt);
         $this->assertStringContainsString('- Core keyword: AI CRM', $prompt);
         $this->assertStringContainsString('Reference knowledge from the business knowledge base.', $prompt);
+        $this->assertStringContainsString('never output citation placeholders', $prompt);
+        $this->assertStringNotContainsString('cite the evidence ID', $prompt);
         $this->assertStringContainsString('Please output only the final article body in Markdown.', $prompt);
     }
 
-    public function test_worker_prompt_with_knowledge_context_requires_evidence_ids(): void
+    public function test_worker_prompt_with_knowledge_context_keeps_evidence_internal(): void
     {
         $prompt = $this->renderContentPrompt(
             'GEO 诊断怎么做？',
@@ -65,10 +67,9 @@ class WorkerExecutionServicePromptTest extends TestCase
         );
 
         $this->assertStringContainsString('【证据 K1】', $prompt);
-        $this->assertStringContainsString('知识库引用要求', $prompt);
-        $this->assertStringContainsString('优先依据参考知识中的 [K1] 等证据编号', $prompt);
-        $this->assertStringContainsString('并在相关句子后标注证据编号', $prompt);
-        $this->assertStringNotContainsString('禁止输出任何引用占位符', $prompt);
+        $this->assertStringContainsString('知识库依据表达要求', $prompt);
+        $this->assertStringContainsString('禁止输出任何引用占位符', $prompt);
+        $this->assertStringNotContainsString('并在相关句子后标注证据编号', $prompt);
         $this->assertStringContainsString('证据不足时不要编造来源或结论', $prompt);
     }
 

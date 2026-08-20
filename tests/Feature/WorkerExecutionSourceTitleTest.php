@@ -24,7 +24,7 @@ class WorkerExecutionSourceTitleTest extends TestCase
                 'model' => 'test-chat-model',
                 'choices' => [[
                     'index' => 0,
-                    'message' => ['role' => 'assistant', 'content' => "# 自动文章\n\n完整正文。"],
+                    'message' => ['role' => 'assistant', 'content' => "# 自动文章\n\n核心结论 [K1]。完整正文【K2】。"],
                     'finish_reason' => 'stop',
                 ]],
                 'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 20, 'total_tokens' => 30],
@@ -67,5 +67,10 @@ class WorkerExecutionSourceTitleTest extends TestCase
         $this->assertSame((int) $title->id, (int) $article->source_title_id);
         $this->assertSame(1, (int) $title->fresh()->used_count);
         $this->assertSame(1, (int) $title->fresh()->usage_count);
+        $this->assertSame("# 自动文章\n\n核心结论。完整正文。", $article->content);
+        $this->assertStringNotContainsString('K1', (string) $article->excerpt);
+        $this->assertStringNotContainsString('K2', (string) $article->excerpt);
+        $this->assertStringNotContainsString('K1', (string) $article->meta_description);
+        $this->assertStringNotContainsString('K2', (string) $article->meta_description);
     }
 }
