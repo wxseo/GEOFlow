@@ -73,6 +73,24 @@ class WorkerExecutionServicePromptTest extends TestCase
         $this->assertStringContainsString('证据不足时不要编造来源或结论', $prompt);
     }
 
+    public function test_worker_prompt_receives_reviewed_brand_assets_and_link_rules(): void
+    {
+        $prompt = $this->renderContentPrompt(
+            'QRQC 如何做闭环管理？',
+            'QRQC',
+            '请写一篇实践指南。',
+            '行业知识片段。',
+            "【企业品牌资产】\n- 资产名称：BIQS\n### 产品能力\nQRQC 闭环管理\n### 批准使用的官方链接\n- https://www.biqs.cn/products/qrqc"
+        );
+
+        $this->assertStringContainsString('【已审核的品牌与产品资产】', $prompt);
+        $this->assertStringContainsString('- 资产名称：BIQS', $prompt);
+        $this->assertStringContainsString('https://www.biqs.cn/products/qrqc', $prompt);
+        $this->assertStringContainsString('自然提及企业或品牌 1—2 次', $prompt);
+        $this->assertStringContainsString('正文至少使用其中一个与主题最相关的链接', $prompt);
+        $this->assertStringContainsString('严禁编造或改写 URL', $prompt);
+    }
+
     public function test_unknown_template_blocks_are_preserved_for_future_extensions(): void
     {
         $prompt = $this->renderContentPrompt(
@@ -86,12 +104,18 @@ class WorkerExecutionServicePromptTest extends TestCase
         $this->assertStringContainsString('标题：AI CRM 到底是什么？', $prompt);
     }
 
-    private function renderContentPrompt(string $title, string $keyword, ?string $promptContent, string $knowledgeContext): string
+    private function renderContentPrompt(
+        string $title,
+        string $keyword,
+        ?string $promptContent,
+        string $knowledgeContext,
+        string $brandContext = '',
+    ): string
     {
         $service = app(WorkerExecutionService::class);
         $method = new ReflectionMethod($service, 'buildContentPrompt');
         $method->setAccessible(true);
 
-        return (string) $method->invoke($service, $title, $keyword, $promptContent, $knowledgeContext);
+        return (string) $method->invoke($service, $title, $keyword, $promptContent, $knowledgeContext, $brandContext);
     }
 }

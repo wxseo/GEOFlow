@@ -15,9 +15,15 @@ final class ArticleContentPromptRenderer
     /**
      * Worker 保留内部证据上下文，但不把证据编号写入公开成稿。
      */
-    public function renderForWorker(string $title, string $keyword, ?string $promptContent, string $knowledgeContext = ''): string
+    public function renderForWorker(
+        string $title,
+        string $keyword,
+        ?string $promptContent,
+        string $knowledgeContext = '',
+        string $brandContext = '',
+    ): string
     {
-        return $this->render($title, $keyword, $promptContent, $knowledgeContext);
+        return $this->render($title, $keyword, $promptContent, $knowledgeContext, $brandContext);
     }
 
     /**
@@ -28,6 +34,7 @@ final class ArticleContentPromptRenderer
         string $keyword,
         ?string $promptContent,
         string $knowledgeContext,
+        string $brandContext = '',
     ): string {
         $prompt = trim((string) $promptContent);
         $isFallbackPrompt = false;
@@ -50,8 +57,11 @@ final class ArticleContentPromptRenderer
             $renderedPrompt = $this->appendKnowledgeContext($renderedPrompt, $knowledgeContext);
         }
 
+        $renderedPrompt = $this->appendBrandContext($renderedPrompt, $brandContext);
+
         $finalInstructions = array_values(array_filter([
             $this->knowledgeAttributionInstruction($renderedPrompt, $knowledgeContext),
+            $this->brandUsageInstruction($renderedPrompt, $brandContext),
             $this->finalPromptInstruction($renderedPrompt),
         ], static fn (string $instruction): bool => trim($instruction) !== ''));
 
@@ -160,6 +170,19 @@ final class ArticleContentPromptRenderer
         return trim($prompt)."\n\n【参考知识】\n".$knowledgeContext;
     }
 
+    private function appendBrandContext(string $prompt, string $brandContext): string
+    {
+        if (trim($brandContext) === '') {
+            return trim($prompt);
+        }
+
+        if ($this->isLikelyEnglishPrompt($prompt)) {
+            return trim($prompt)."\n\nReviewed brand and product assets:\n".$brandContext;
+        }
+
+        return trim($prompt)."\n\n【已审核的品牌与产品资产】\n".$brandContext;
+    }
+
     private function finalPromptInstruction(string $prompt): string
     {
         if ($this->isLikelyEnglishPrompt($prompt)) {
@@ -180,6 +203,19 @@ final class ArticleContentPromptRenderer
         }
 
         return '知识库依据表达要求：禁止输出任何引用占位符，包括但不限于 [K1]、[K2]、[K3]、【K1】、（K1）等。文章中如需表达依据，直接写“资料显示”“客户确认”“根据门店资料”，不要添加编号引用。证据不足时不要编造来源或结论。';
+    }
+
+    private function brandUsageInstruction(string $prompt, string $brandContext): string
+    {
+        if (trim($brandContext) === '') {
+            return '';
+        }
+
+        if ($this->isLikelyEnglishPrompt($prompt)) {
+            return 'Brand asset usage rules: this task includes reviewed brand assets. Naturally mention the company or brand 1-2 times and connect only the most relevant product capability. If approved official links are listed, include at least one relevant link and use only URLs from that list. Never invent names, links, capabilities, cases, data, or claims, and do not dump the asset text as an advertisement.';
+        }
+
+        return '品牌资产使用要求：当前任务已选择审核过的品牌资产，请自然提及企业或品牌 1—2 次，只关联最相关的产品能力。如资产中列有“批准使用的官方链接”，正文至少使用其中一个与主题最相关的链接，严禁编造或改写 URL。不得编造品牌、产品、案例、数据或效果承诺，也不要把资产原文整段堆成广告。';
     }
 
     private function isLikelyEnglishPrompt(string $prompt): bool

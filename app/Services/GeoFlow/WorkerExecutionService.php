@@ -41,6 +41,7 @@ class WorkerExecutionService
         private readonly ArticleWorkflowTransitionService $articleWorkflowTransitionService,
         private readonly ArticleContentPromptRenderer $articleContentPromptRenderer,
         private readonly ArticleContentGenerationService $articleContentGenerationService,
+        private readonly EnterpriseKnowledgeBrandContextResolver $enterpriseKnowledgeBrandContextResolver,
     ) {}
 
     /**
@@ -86,17 +87,25 @@ class WorkerExecutionService
 
         $keyword = (string) ($titleRow->keyword ?? '');
         $knowledgeContext = $this->resolveKnowledgeContext($task, (string) $titleRow->title, $keyword);
-        $contentPrompt = $this->buildContentPrompt((string) $titleRow->title, $keyword, $prompt?->content, $knowledgeContext);
+        $brandContext = $this->resolveBrandContext($task);
+        $contentPrompt = $this->buildContentPrompt((string) $titleRow->title, $keyword, $prompt?->content, $knowledgeContext, $brandContext);
         $generation = $this->generateContentWithModelSelection($task, $contentPrompt);
         $aiModel = $generation['model'];
         $generatedContent = InternalEvidenceMarker::remove($generation['content']);
+        $brandComplianceIssues = $this->enterpriseKnowledgeBrandContextResolver->complianceIssues($brandContext, $generatedContent);
+        if ($brandComplianceIssues !== []) {
+            Log::warning('GeoFlow 正文未满足品牌资产使用要求，已保留待审', [
+                'task_id' => (int) $task->id,
+                'issues' => $brandComplianceIssues,
+            ]);
+        }
         $imageResult = $this->insertTaskImagesIntoContent($task, $generatedContent);
         $content = $imageResult['content'];
         $selectedImages = $imageResult['images'];
         $excerpt = $this->buildExcerpt($content);
         $workflow = [
             'status' => 'draft',
-            'review_status' => (int) ($task->need_review ?? 1) === 1 ? 'pending' : 'approved',
+            'review_status' => (int) ($task->need_review ?? 1) === 1 || $brandComplianceIssues !== [] ? 'pending' : 'approved',
             'published_at' => null,
         ];
 
@@ -192,6 +201,8 @@ class WorkerExecutionService
                 'author_id' => $author?->id,
                 'category_id' => $category?->id,
                 'knowledge_length' => mb_strlen($knowledgeContext, 'UTF-8'),
+                'brand_context_length' => mb_strlen($brandContext, 'UTF-8'),
+                'brand_compliance_issues' => $brandComplianceIssues,
                 'image_count' => count($selectedImages),
                 'model_selection_mode' => (string) ($task->model_selection_mode ?? 'fixed'),
                 'used_model_id' => (int) $aiModel->id,
@@ -518,9 +529,20 @@ class WorkerExecutionService
     /**
      * 构造正文提示词：优先精确替换变量；无变量的自定义提示词自动补齐任务上下文。
      */
-    private function buildContentPrompt(string $title, string $keyword, ?string $promptContent, string $knowledgeContext): string
+    private function buildContentPrompt(
+        string $title,
+        string $keyword,
+        ?string $promptContent,
+        string $knowledgeContext,
+        string $brandContext = '',
+    ): string
     {
-        return $this->articleContentPromptRenderer->renderForWorker($title, $keyword, $promptContent, $knowledgeContext);
+        return $this->articleContentPromptRenderer->renderForWorker($title, $keyword, $promptContent, $knowledgeContext, $brandContext);
+    }
+
+    private function resolveBrandContext(Task $task): string
+    {
+        return $this->enterpriseKnowledgeBrandContextResolver->resolve($this->resolveTaskKnowledgeBaseIds($task));
     }
 
     /**
