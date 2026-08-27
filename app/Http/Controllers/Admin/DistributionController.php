@@ -1070,7 +1070,9 @@ class DistributionController extends Controller
         $channelIds = $this->validatedSyncChannelIds($request);
 
         if ($channelIds->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
 
         $channels = $this->syncableAgentChannelsQuery()
@@ -1079,12 +1081,16 @@ class DistributionController extends Controller
             ->get();
 
         if ($channels->isEmpty()) {
-            return back()->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors(__('admin.distribution.message.settings_sync_selected_empty'));
         }
 
         if (! $request->boolean('frontend_sync_confirmed')
             && (bool) $this->frontendExperienceInspector->syncPreviewForChannels($channels)['requires_confirmation']) {
-            return back()->withErrors('同步前需要先通过预览页确认前台体验风险。');
+            return redirect()
+                ->route('admin.distribution.index')
+                ->withErrors('同步前需要先通过预览页确认前台体验风险。');
         }
 
         $synced = 0;
@@ -1107,8 +1113,8 @@ class DistributionController extends Controller
         ]);
 
         return $failed > 0
-            ? back()->with('message', $message)->withErrors(__('admin.distribution.message.settings_synced_all_failed_hint'))
-            : back()->with('message', $message);
+            ? redirect()->route('admin.distribution.index')->with('message', $message)->withErrors(__('admin.distribution.message.settings_synced_all_failed_hint'))
+            : redirect()->route('admin.distribution.index')->with('message', $message);
     }
 
     /**

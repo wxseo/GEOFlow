@@ -2226,7 +2226,7 @@ class AdminDistributionPageTest extends TestCase
                     (int) $paused->id,
                 ],
             ])
-            ->assertRedirect()
+            ->assertRedirect(route('admin.distribution.index'))
             ->assertSessionHas('message', __('admin.distribution.message.settings_synced_selected', [
                 'success' => 2,
                 'failed' => 0,
@@ -2250,7 +2250,7 @@ class AdminDistributionPageTest extends TestCase
             ->post(route('admin.distribution.sync-settings-selected'), [
                 'channel_ids' => [],
             ])
-            ->assertRedirect()
+            ->assertRedirect(route('admin.distribution.index'))
             ->assertSessionHasErrors();
     }
 
