@@ -4,9 +4,9 @@
 
 面向站点管理员和服务器管理员，涵盖首次安装、旧站接管、后台升级、自动迁移、备份和恢复。
 
-本文依据 [GEOFlow PR #122](https://github.com/yaojingang/GEOFlow/pull/122) 与 [updater PR #16](https://github.com/yaojingang/geoflow-updater/pull/16) 合并后的实现编写。后续恢复修复及完整双架构结果见[主机验收记录](reports/2026-09-09-blue-green-host-acceptance.md)。
+本文依据 [GEOFlow PR #122](https://github.com/yaojingang/GEOFlow/pull/122) 与 [updater PR #16](https://github.com/yaojingang/geoflow-updater/pull/16) 合并后的实现编写。历史候选及恢复修复见[主机验收记录](reports/2026-09-09-blue-green-host-acceptance.md)，正式版本的 [11 项双架构验收](https://github.com/yaojingang/geoflow-updater/actions/runs/34324570077)全部通过。
 
-> **版本前提，核对于 2026 年 9 月 9 日：** 本轮功能已合入两个仓库的 main。公开稳定版仍为 [GEOFlow v3.0.0](https://github.com/yaojingang/GEOFlow/releases/tag/v3.0.0) 和 [updater v0.3.0](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.3.0)，尚未包含本轮完整能力。以下新流程需要后续正式发布的 updater、配套应用镜像和已签名升级计划。仅拉取 main 或安装现有 v0.3.0，无法完成本文的新流程；下一版版本号以正式发布为准。
+> **正式版本，2026 年 9 月 9 日：** [GEOFlow v3.1.0](https://github.com/yaojingang/GEOFlow/releases/tag/v3.1.0) 与 [Updater v0.4.0](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.4.0) 已正式发布，配套双架构镜像和签名更新源已公开，更新序列为 `3`。本次升级采用 `maintenance`，3.0.0 到 3.1.0 升级及首次蓝绿布局转换均需维护窗口。旧站请按 [3.1 升级说明](deployment/GEOFLOW_V3_1_UPGRADE.md)操作。
 
 ## 1. 选择使用路径
 
@@ -57,12 +57,12 @@ systemctl --version
 
 ### 3.2 下载并校验
 
-从 [updater Releases](https://github.com/yaojingang/geoflow-updater/releases) 选择明确包含本轮功能的正式版本，下载对应架构的压缩包与 `checksums.txt`，放入专用目录。
+从 [Updater v0.4.0 正式发布页](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.4.0)下载对应架构的压缩包与 `checksums.txt`，放入专用目录。
 
-下面的 `X.Y.Z` 是占位符，替换为实际版本号，不带 `v`。命令需要已安装 GitHub CLI：
+本轮配套版本为 `0.4.0`，命令需要已安装 GitHub CLI：
 
 ```bash
-UPDATER_VERSION='X.Y.Z'
+UPDATER_VERSION='0.4.0'
 UPDATER_ARCH='amd64'
 UPDATER_ARCHIVE="geoflow-updater_${UPDATER_VERSION}_linux_${UPDATER_ARCH}.tar.gz"
 
@@ -125,7 +125,7 @@ sudo cat /opt/geoflow/install-credentials.txt
 
 ### 5.1 接管前准备
 
-站点目录应包含 `.env.prod`、`storage/` 和当前 `version.json`。接管要求当前版本信息与签名发布相匹配。若版本不匹配，先按受支持的旧版流程达到可接管版本，不要手改 `version.json` 通过检查。
+站点目录应包含 `.env.prod`、`storage/` 和当前 `version.json`。接管要求当前版本信息与签名发布相匹配。若版本不匹配，先按 [3.1 升级说明](deployment/GEOFLOW_V3_1_UPGRADE.md)维护升级至签名源匹配版本，不要手改 `version.json` 通过检查。
 
 接管保留配置中的 PostgreSQL、Redis 主版本。支持 PostgreSQL 16、18 和 Redis 7、8，需要确认镜像主版本与实际数据目录一致。数据库大版本迁移需单独安排。
 
@@ -182,6 +182,8 @@ URI 含授权秘密，不要放入工单、聊天记录或公开截图。每次�
 后台默认还要求当前管理员密码，是否显示以站点配置为准。获取计划和运行环境验收无需操作授权码；服务器 CLI 依靠主机管理员权限执行。
 
 ## 7. 日常升级：后台操作
+
+已有受管 `3.0.0` 的首次升级应按 [3.1 升级说明](deployment/GEOFLOW_V3_1_UPGRADE.md)通过宿主机 CLI 确认维护计划；升级到 3.1 后再使用本节后台入口。
 
 1. 用超级管理员打开“系统更新”，默认路径为 `/geo_admin/system-updates`。确认 updater 已连接、授权已配置，当前没有执行中或待恢复操作。
 2. 点击“获取升级计划”。预检可能拉取镜像、启动临时检查容器，需要等待；它不会执行本次迁移或切流。
@@ -403,7 +405,7 @@ updater 启动及后台检查会根据持久化记录处理被中断的操作。
 
 普通站点管理员按上述流程选择和确认计划。在线兼容性由发布者声明，并通过对应候选版本的验证。
 
-**2026 年 9 月 9 日进展：** Updater `0.4.0-rc.4` 配套签名候选已完成原生 amd64、arm64 的安装、完整升级恢复、中断恢复和在线机制验收，全部通过。候选身份、逐项结果及修复 PR 见[验收记录](reports/2026-09-09-blue-green-host-acceptance.md)。技术验收与正式发布分别记录，安装时仍需满足[版本前提](#geoflow-蓝绿部署与自动迁移使用教程)。
+**2026 年 9 月 9 日正式验收：** 配套 Updater `0.4.0` 的[正式候选](https://github.com/yaojingang/geoflow-updater/actions/runs/34322064152)完成了原生 amd64、arm64 的容器检查、首次安装、升级恢复、在线机制和同版本接管转换验收，[11 个任务全部通过](https://github.com/yaojingang/geoflow-updater/actions/runs/34324570077)。[配套发布](https://github.com/yaojingang/geoflow-updater/actions/runs/34342933580)与[更新源部署](https://github.com/yaojingang/geoflow-updater/actions/runs/34343146320)均已完成。早期 `0.4.0-rc.4` 的结果保留在[历史验收记录](reports/2026-09-09-blue-green-host-acceptance.md)。
 
 - `deployment/upgrade-plan.json` 固定迁移文件摘要。新增迁移后更新并审阅清单，再运行 `python3 deployment/generate-upgrade-plan.py --check`。
 - schema 3 发布清单将完整计划纳入 TUF 签名目标 `releases/<version>/upgrade-plan.json`。维护计划要求协议至少为 3，在线计划至少为 4；应用计划与预检摘要各自的 schema 版本需分别理解。

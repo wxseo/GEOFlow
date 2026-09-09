@@ -4,9 +4,9 @@
 
 For site and server administrators. This tutorial covers fresh installation, enrollment, updates through the admin UI or CLI, automatic migrations, backups, and recovery.
 
-It follows the implementation merged in [GEOFlow PR #122](https://github.com/yaojingang/GEOFlow/pull/122) and [updater PR #16](https://github.com/yaojingang/geoflow-updater/pull/16). Subsequent recovery fixes and complete dual-architecture results are recorded in the [host acceptance report](reports/2026-09-09-blue-green-host-acceptance_en.md).
+It follows the implementation merged in [GEOFlow PR #122](https://github.com/yaojingang/GEOFlow/pull/122) and [updater PR #16](https://github.com/yaojingang/geoflow-updater/pull/16). Historical candidates and recovery fixes are recorded in the [host acceptance report](reports/2026-09-09-blue-green-host-acceptance_en.md). All [11 dual-architecture acceptance jobs](https://github.com/yaojingang/geoflow-updater/actions/runs/34324570077) for the official version passed.
 
-> **Release prerequisite, checked September 9, 2026:** These changes are merged into both repositories' main branches. The published stable versions remain [GEOFlow v3.0.0](https://github.com/yaojingang/GEOFlow/releases/tag/v3.0.0) and [updater v0.3.0](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.3.0), which do not include the complete workflow described here. You need a subsequent official updater release, matching application images, and a signed upgrade plan. Pulling main or installing the existing v0.3.0 package alone is insufficient. Use the version number from the official release when it becomes available.
+> **Official release, September 9, 2026:** [GEOFlow v3.1.0](https://github.com/yaojingang/GEOFlow/releases/tag/v3.1.0) and [Updater v0.4.0](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.4.0) are published, with matching dual-architecture images and a public signed update source at release sequence `3`. This release uses `maintenance`; both the 3.0.0 to 3.1.0 upgrade and initial blue/green conversion require a maintenance window. Existing sites should follow the [3.1 upgrade instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md).
 
 ## 1. Choose your path
 
@@ -57,12 +57,12 @@ systemctl --version
 
 ### 3.2 Download and verify
 
-Choose an official release that explicitly includes this workflow from [updater Releases](https://github.com/yaojingang/geoflow-updater/releases). Download the archive for your architecture and `checksums.txt` into a dedicated directory.
+Download the archive for your architecture and `checksums.txt` from the [Updater v0.4.0 release](https://github.com/yaojingang/geoflow-updater/releases/tag/v0.4.0) into a dedicated directory.
 
-Replace the `X.Y.Z` placeholder below with the actual version, without a leading `v`. These commands require GitHub CLI:
+The matching updater version for this release is `0.4.0`. These commands require GitHub CLI:
 
 ```bash
-UPDATER_VERSION='X.Y.Z'
+UPDATER_VERSION='0.4.0'
 UPDATER_ARCH='amd64'
 UPDATER_ARCHIVE="geoflow-updater_${UPDATER_VERSION}_linux_${UPDATER_ARCH}.tar.gz"
 
@@ -125,7 +125,7 @@ For an already managed instance, go directly to [section 7](#7-routine-updates-t
 
 ### 5.1 Prepare for enrollment
 
-The site directory must contain `.env.prod`, `storage/`, and the current `version.json`. The installed version must match the signed release used for enrollment. If it does not, follow the supported legacy upgrade procedure to reach an enrollable version. Do not edit `version.json` to bypass this check.
+The site directory must contain `.env.prod`, `storage/`, and the current `version.json`. The installed version must match the signed release used for enrollment. If it does not, follow the [3.1 upgrade instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md) to reach the matching signed version during maintenance. Do not edit `version.json` to bypass this check.
 
 Enrollment preserves the configured PostgreSQL and Redis major versions. Supported majors are PostgreSQL 16 or 18 and Redis 7 or 8. Verify that the image major matches the actual data directory. Schedule database major-version migrations separately.
 
@@ -182,6 +182,8 @@ These URIs contain authorization secrets. Keep them out of tickets, chat logs, a
 The admin UI also requires the current administrator password by default; the site configuration controls this requirement. Plan previews and verification do not need an operation code. The server CLI uses host administrator permissions.
 
 ## 7. Routine updates through the admin UI
+
+For the first upgrade of an enrolled `3.0.0` site, follow the [3.1 instructions](deployment/GEOFLOW_V3_1_UPGRADE_en.md) and confirm the maintenance plan through the host CLI. Use the admin workflow below after reaching 3.1.
 
 1. Open “System Update Center” as a super administrator. The default path is `/geo_admin/system-updates`. Confirm that updater is connected, authorization is configured, and no operation is running or awaiting recovery.
 2. Click “Preview upgrade plan.” Preview may pull images and start temporary inspection containers. Allow it to finish; it does not apply migrations or switch traffic for this update.
@@ -403,7 +405,7 @@ Before sharing diagnostics, remove passwords, tokens, authorization URIs, and pr
 
 Site administrators select and confirm plans through the workflow above. Publishers declare online compatibility and validate it against the corresponding candidate release.
 
-**September 9, 2026 update:** The signed candidate paired with Updater `0.4.0-rc.4` passed installation, full upgrade/restoration, interruption recovery and online-mechanism acceptance on native amd64 and arm64. See the [acceptance report](reports/2026-09-09-blue-green-host-acceptance_en.md) for candidate identity, individual results and fix PRs. Technical acceptance and official publication have separate records; installation still requires the [release prerequisites](#geoflow-bluegreen-deployment-and-automatic-migration-tutorial).
+**Official acceptance, September 9, 2026:** The [official candidate](https://github.com/yaojingang/geoflow-updater/actions/runs/34322064152) paired with Updater `0.4.0` passed native amd64 and arm64 container checks, fresh installation, upgrade/restoration, online-mechanism and same-version enrollment/conversion acceptance: [all 11 jobs passed](https://github.com/yaojingang/geoflow-updater/actions/runs/34324570077). [Paired publication](https://github.com/yaojingang/geoflow-updater/actions/runs/34342933580) and [update-source deployment](https://github.com/yaojingang/geoflow-updater/actions/runs/34343146320) are complete. Earlier `0.4.0-rc.4` results remain in the [historical acceptance report](reports/2026-09-09-blue-green-host-acceptance_en.md).
 
 - `deployment/upgrade-plan.json` pins migration-file digests. After adding migrations, update and review the manifest, then run `python3 deployment/generate-upgrade-plan.py --check`.
 - A schema 3 release manifest includes the complete plan as the TUF-signed target `releases/<version>/upgrade-plan.json`. Maintenance plans require protocol 3 or later; online plans require protocol 4 or later. Application-plan and preview schemas have their own versions.
