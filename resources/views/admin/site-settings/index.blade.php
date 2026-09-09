@@ -73,6 +73,45 @@
             ],
         ],
     ];
+
+    if (auth('admin')->user()?->canManageProtectedWorkflows()) {
+        $siteSettingsGroupRows[] = [
+            [
+                'title' => __('admin.ui_v3.system_management'),
+                'desc' => __('admin.ui_v3.system_management_hint'),
+                'columns' => 'lg:grid-cols-3',
+                'items' => [
+                    [
+                        'title' => __('admin.ui_v3.users_permissions'),
+                        'desc' => __('admin.ui_v3.user_settings_hint'),
+                        'href' => route('admin.admin-users.index'),
+                        'target' => null,
+                        'icon' => 'users-round',
+                        'iconClass' => 'bg-blue-50 text-blue-600 ring-blue-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                    [
+                        'title' => __('admin.ui_v3.security_audit'),
+                        'desc' => __('admin.ui_v3.audit_settings_hint'),
+                        'href' => route('admin.admin-activity-logs'),
+                        'target' => null,
+                        'icon' => 'shield-check',
+                        'iconClass' => 'bg-emerald-50 text-emerald-600 ring-emerald-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                    [
+                        'title' => __('admin.ui_v3.system_updates'),
+                        'desc' => __('admin.ui_v3.system_updates_hint'),
+                        'href' => route('admin.system-updates.index'),
+                        'target' => null,
+                        'icon' => 'refresh-cw',
+                        'iconClass' => 'bg-violet-50 text-violet-600 ring-violet-100',
+                        'action' => __('admin.site_settings.manage_module'),
+                    ],
+                ],
+            ],
+        ];
+    }
 @endphp
 
 @section('content')
@@ -468,8 +507,7 @@
                                 <i data-lucide="layout-dashboard" class="mr-1.5 h-3.5 w-3.5"></i>
                                 {{ __('admin.site_settings.homepage.badge') }}
                             </div>
-                            <h4 class="mt-3 text-base font-semibold text-gray-900">{{ __('admin.site_settings.homepage.section_title') }}</h4>
-                            <p class="mt-1 text-sm leading-6 text-gray-600">{{ __('admin.site_settings.homepage.section_desc') }}</p>
+                            <p class="mt-3 max-w-3xl text-sm leading-6 text-gray-600">{{ __('admin.site_settings.homepage.section_desc') }}</p>
                         </div>
                         <div class="flex shrink-0 flex-wrap gap-2">
                             <button type="button" id="add-homepage-module" class="inline-flex min-h-10 items-center rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50">
@@ -725,6 +763,14 @@
                     </div>
                     @endif
 
+                    @if(auth('admin')->user()?->canManageProtectedWorkflows())
+                        <div class="flex flex-wrap items-center justify-between gap-3 border-y border-gray-200 py-4" data-theme-package-actions>
+                            <p class="text-sm text-gray-600">{{ __('admin.theme_packages.entry_hint') }}</p>
+                            <a href="{{ route('admin.site-settings.theme-packages.imports.create') }}" class="inline-flex min-h-11 items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 active:scale-[.98]">
+                                <i data-lucide="upload" class="h-4 w-4" aria-hidden="true"></i>{{ __('admin.theme_packages.import_title') }}
+                            </a>
+                        </div>
+                    @endif
                     <div class="space-y-4">
                         <label class="flex items-start gap-4 rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
                             <input type="radio" name="active_theme" value="" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === '')>
@@ -736,7 +782,7 @@
 
                         @foreach ($availableThemes as $themeOption)
                             <label class="flex items-start gap-4 rounded-2xl border border-gray-200 bg-white p-4">
-                                <input type="radio" name="active_theme" value="{{ $themeOption['id'] }}" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === $themeOption['id'])>
+                                <input type="radio" name="active_theme" value="{{ $themeOption['id'] }}" class="mt-1 text-blue-600 focus:ring-blue-500" @checked($settings['active_theme'] === $themeOption['id']) @disabled(($themeOption['source'] ?? '') === 'installed' && !auth('admin')->user()?->canManageProtectedWorkflows())>
                                 <div class="min-w-0 flex-1">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <div class="text-sm font-semibold text-gray-900">{{ $themeOption['name'] }}</div>
@@ -746,16 +792,30 @@
                                         @if ($settings['active_theme'] === $themeOption['id'])
                                             <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">{{ __('admin.site_settings.theme.active_badge') }}</span>
                                         @endif
+                                        @if(($themeOption['source'] ?? '') === 'installed')
+                                            <span class="text-xs text-gray-500">{{ __('admin.theme_packages.source_installed') }}</span>
+                                        @endif
+                                        @if(($themeOption['distribution']['visibility'] ?? '') === 'customer_private')
+                                            <span class="text-xs font-medium text-amber-800">{{ __('admin.theme_packages.private') }}</span>
+                                        @endif
                                     </div>
                                     <div class="mt-1 text-sm text-gray-600">
                                         {{ $themeOption['description'] !== '' ? $themeOption['description'] : __('admin.site_settings.theme.no_description') }}
                                     </div>
+                                    @if(($themeOption['source'] ?? '') === 'installed' && auth('admin')->user()?->canManageProtectedWorkflows())
+                                        <a class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-blue-700 hover:underline" href="{{ route('admin.site-settings.theme-packages.preview', ['themeId' => $themeOption['id']]) }}">{{ __('admin.theme_packages.preview.title') }}</a>
+                                    @endif
                                 </div>
                             </label>
                         @endforeach
                     </div>
 
-                    <div class="flex justify-end pt-2 border-t border-gray-200">
+                    <div class="flex flex-wrap justify-end gap-3 pt-4 border-t border-gray-200">
+                        @if(auth('admin')->user()?->canManageProtectedWorkflows())
+                            <button type="submit" formaction="{{ route('admin.site-settings.theme-packages.exports.store') }}" class="inline-flex min-h-11 items-center gap-2 rounded-md border border-gray-300 bg-white px-5 py-2.5 text-sm font-medium text-gray-800 hover:bg-gray-50 active:scale-[.98]">
+                                <i data-lucide="download" class="h-4 w-4" aria-hidden="true"></i>{{ __('admin.theme_packages.export_title') }}
+                            </button>
+                        @endif
                         <button type="submit" class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
                             <i data-lucide="layout-template" class="w-5 h-5 mr-2"></i>
                             {{ __('admin.site_settings.theme.save') }}
@@ -1242,9 +1302,8 @@
                 bindRemove(item);
                 refreshState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(item);
+                else window.lucide?.createIcons?.();
             });
 
             list.querySelectorAll('.homepage-module-item').forEach(bindRemove);
@@ -1314,7 +1373,7 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            if (typeof lucide !== 'undefined') {
+            if (! window.GeoFlowAdminUi?.refreshIcons && typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
 
@@ -1359,9 +1418,8 @@
                 bindRemove(adItem);
                 refreshState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(adItem);
+                else window.lucide?.createIcons?.();
             });
 
             adList.querySelectorAll('.article-ad-item').forEach(bindRemove);
@@ -1589,9 +1647,8 @@
                     bindColorPicker(linkItem);
                     refreshTextAdLinks(scope);
 
-                    if (typeof lucide !== 'undefined') {
-                        lucide.createIcons();
-                    }
+                    if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(linkItem);
+                    else window.lucide?.createIcons?.();
                 });
             }
 
@@ -1643,9 +1700,8 @@
                 bindTextAdModule(textAdItem);
                 refreshTextAdState();
 
-                if (typeof lucide !== 'undefined') {
-                    lucide.createIcons();
-                }
+                if (window.GeoFlowAdminUi?.refreshIcons) window.GeoFlowAdminUi.refreshIcons(textAdItem);
+                else window.lucide?.createIcons?.();
             });
 
             textAdList.querySelectorAll('.article-text-ad-item').forEach(function (item) {

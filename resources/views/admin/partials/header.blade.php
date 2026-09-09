@@ -6,13 +6,11 @@
     $updateNotification = is_array($adminUpdateNotificationPayload ?? null) ? $adminUpdateNotificationPayload : [];
     $updateState = is_array($updateNotification['state'] ?? null) ? $updateNotification['state'] : [];
     $updateLinks = is_array($updateNotification['links'] ?? null) ? $updateNotification['links'] : [];
+    $releaseNotice = is_array($updateNotification['release_notice'] ?? null) ? $updateNotification['release_notice'] : [];
     $hasVersionUpdate = !empty($updateState['is_update_available']);
     $isUpdateCenterEnabled = (bool) config('geoflow.update_center_enabled', true);
     $localeForChangelog = app()->getLocale() === 'en' ? 'en' : 'zh-CN';
-    $updatePayload = is_array($updateState['payload'] ?? null) ? $updateState['payload'] : [];
-    $updateSummary = (string) ($localeForChangelog === 'en'
-        ? ($updatePayload['summary_en'] ?? '')
-        : ($updatePayload['summary_zh'] ?? ''));
+    $updateSummary = (string) ($releaseNotice['summary'] ?? '');
     $changelogLinks = is_array($updateLinks['changelog'] ?? null) ? $updateLinks['changelog'] : [];
     $notificationChangelogUrl = (string) ($changelogLinks[$localeForChangelog] ?? $changelogLinks['zh-CN'] ?? 'https://github.com/yaojingang/GEOFlow/blob/main/docs/CHANGELOG.md');
     $notificationGithubUrl = (string) ($updateLinks['github'] ?? 'https://github.com/yaojingang/GEOFlow');
@@ -43,8 +41,14 @@
         'admin.analytics.distribution' => 'analytics',
         'admin.system-updates.index' => 'dashboard',
         'admin.system-updates.check' => 'dashboard',
-        'admin.system-updates.plan' => 'dashboard',
-        'admin.system-updates.backup' => 'dashboard',
+		'admin.system-updates.updater.prepare' => 'dashboard',
+		'admin.system-updates.updater.download' => 'dashboard',
+		'admin.system-updates.updater.update' => 'dashboard',
+		'admin.system-updates.updater.backup' => 'dashboard',
+		'admin.system-updates.updater.rollback' => 'dashboard',
+		'admin.system-updates.updater.verify' => 'dashboard',
+		'admin.system-updates.runs.show' => 'dashboard',
+		'admin.system-updates.backups.show' => 'dashboard',
         'admin.tasks.create' => 'tasks',
         'admin.tasks.edit' => 'tasks',
         'admin.distribution.index' => 'distribution',
@@ -94,6 +98,7 @@
         'admin.image-libraries.create' => 'materials',
         'admin.image-libraries.edit' => 'materials',
         'admin.image-libraries.detail' => 'materials',
+        'admin.image-libraries.images.create' => 'materials',
         'admin.image-libraries.images.upload' => 'materials',
         'admin.image-libraries.images.delete' => 'materials',
         'admin.image-libraries.detail.update' => 'materials',
@@ -139,6 +144,9 @@
                 </div>
             </nav>
             <div class="flex shrink-0 items-center gap-2 sm:gap-3 ml-auto">
+                <button type="button" data-pwa-install hidden aria-label="{{ __('admin.ui_v3.install_workbench_label') }}" class="inline-flex min-h-10 items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 transition-[background-color,color,transform] duration-150 hover:bg-gray-50 active:scale-96 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600">
+                    <i data-lucide="app-window" class="h-4 w-4"></i><span class="hidden lg:inline">{{ __('admin.ui_v3.install_workbench') }}</span>
+                </button>
                 <div class="relative">
                     <button onclick="toggleAdminNotifications()" class="relative rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors duration-200" type="button" aria-label="{{ __('admin.header.notifications.label') }}" title="{{ __('admin.header.notifications.label') }}">
                         <i data-lucide="bell" class="w-5 h-5"></i>
@@ -177,7 +185,7 @@
                             @endif
 
                             <div class="mt-4 space-y-1 rounded-xl bg-gray-50 px-3 py-3 text-xs text-gray-500">
-                                <div>{{ __('admin.header.notifications.current_version', ['version' => (string) ($updateState['current_version'] ?? config('geoflow.app_version', '2.0'))]) }}</div>
+                                <div>{{ __('admin.header.notifications.current_version', ['version' => (string) ($updateState['current_version'] ?? config('geoflow.app_version', '0.0.0-dev'))]) }}</div>
                                 @if(!empty($updateState['latest_version']))
                                     <div>{{ __('admin.header.notifications.latest_version', ['version' => (string) $updateState['latest_version']]) }}</div>
                                 @endif

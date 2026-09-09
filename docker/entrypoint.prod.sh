@@ -14,8 +14,8 @@ if [ -z "${APP_KEY:-}" ] || ! printf '%s' "${APP_KEY:-}" | grep -q '^base64:'; t
   unset APP_KEY
 fi
 
-# .env.prod 为可写挂载时，无密钥则自动生成（宿主机可无 PHP）。
-if ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
+# 优先使用已注入的密钥；缺少密钥时才读取或初始化可写的 .env.prod。
+if [ -z "${APP_KEY:-}" ] && ! grep -q '^APP_KEY=base64:' .env 2>/dev/null; then
   echo "[entrypoint-prod] php artisan key:generate --force"
   php artisan key:generate --force --no-interaction
 fi
@@ -29,6 +29,20 @@ mkdir -p \
   storage/framework/sessions \
   storage/framework/views \
   storage/logs
+
+if [ "${AUTO_FIX_STORAGE_PERMISSIONS:-true}" = "true" ]; then
+  if [ "$(id -u)" = "0" ]; then
+    RUNTIME_USER="${RUNTIME_USER:-www-data}"
+    RUNTIME_GROUP="${RUNTIME_GROUP:-www-data}"
+
+    echo "[entrypoint-prod] fixing storage permissions for ${RUNTIME_USER}:${RUNTIME_GROUP}"
+    chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" storage bootstrap/cache
+    find storage bootstrap/cache -type d -exec chmod 775 {} +
+    find storage bootstrap/cache -type f -exec chmod 664 {} +
+  else
+    echo "[entrypoint-prod] skip permission fix: container is not running as root"
+  fi
+fi
 
 if [ ! -e public/storage ]; then
   php artisan storage:link --force --no-interaction
@@ -63,20 +77,6 @@ fi
 if [ "${AUTO_OPTIMIZE:-true}" = "true" ]; then
   echo "[entrypoint-prod] php artisan optimize"
   php artisan optimize --no-interaction
-fi
-
-if [ "${AUTO_FIX_STORAGE_PERMISSIONS:-true}" = "true" ]; then
-  if [ "$(id -u)" = "0" ]; then
-    RUNTIME_USER="${RUNTIME_USER:-www-data}"
-    RUNTIME_GROUP="${RUNTIME_GROUP:-www-data}"
-
-    echo "[entrypoint-prod] fixing storage permissions for ${RUNTIME_USER}:${RUNTIME_GROUP}"
-    chown -R "${RUNTIME_USER}:${RUNTIME_GROUP}" storage bootstrap/cache
-    find storage bootstrap/cache -type d -exec chmod 775 {} +
-    find storage bootstrap/cache -type f -exec chmod 664 {} +
-  else
-    echo "[entrypoint-prod] skip permission fix: container is not running as root"
-  fi
 fi
 
 exec "$@"

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Data\Ai\SystemAiIdentity;
 use App\Jobs\PrepareKnowledgeChunkSyncJob;
 use App\Models\KnowledgeBase;
 use App\Models\KnowledgeChunk;
@@ -27,9 +28,13 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             'character_count' => 9,
             'file_type' => 'markdown',
             'word_count' => 9,
+            'chunk_serving_generation' => 'serving-v1',
+            'chunk_serving_source_hash' => hash('sha256', '旧版正文。'),
+            'chunk_manifest_hash' => hash('sha256', 'manifest-v1'),
         ]);
         KnowledgeChunk::query()->create([
             'knowledge_base_id' => $knowledgeBase->id,
+            'generation_key' => 'serving-v1',
             'chunk_index' => 0,
             'content' => '仍在提供服务的旧切片。',
             'content_hash' => hash('sha256', '仍在提供服务的旧切片。'),
@@ -37,7 +42,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             'embedding_json' => '[]',
         ]);
 
-        $queued = app(KnowledgeChunkSyncCoordinator::class)->request(
+        $queued = $this->requestSync(app(KnowledgeChunkSyncCoordinator::class),
             (int) $knowledgeBase->id,
             requireRealEmbedding: true,
         );
@@ -46,6 +51,9 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         $knowledgeBase->refresh();
         $this->assertSame('pending', $knowledgeBase->chunk_sync_status);
         $this->assertNotSame('', (string) $knowledgeBase->chunk_sync_token);
+        $this->assertSame('serving-v1', $knowledgeBase->chunk_serving_generation);
+        $this->assertSame(hash('sha256', '旧版正文。'), $knowledgeBase->chunk_serving_source_hash);
+        $this->assertSame(hash('sha256', 'manifest-v1'), $knowledgeBase->chunk_manifest_hash);
         $this->assertSame(
             '仍在提供服务的旧切片。',
             (string) KnowledgeChunk::query()->where('knowledge_base_id', $knowledgeBase->id)->value('content')
@@ -76,7 +84,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             ]);
 
             $this->assertTrue(
-                app(KnowledgeChunkSyncCoordinator::class)->request((int) $knowledgeBase->id)
+                $this->requestSync(app(KnowledgeChunkSyncCoordinator::class), (int) $knowledgeBase->id)
             );
         });
 
@@ -102,8 +110,8 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
 
         $coordinator = app(KnowledgeChunkSyncCoordinator::class);
 
-        $this->assertTrue($coordinator->request((int) $knowledgeBase->id));
-        $this->assertFalse($coordinator->request((int) $knowledgeBase->id));
+        $this->assertTrue($this->requestSync($coordinator, (int) $knowledgeBase->id));
+        $this->assertFalse($this->requestSync($coordinator, (int) $knowledgeBase->id));
 
         Queue::assertPushed(PrepareKnowledgeChunkSyncJob::class, 1);
     }
@@ -122,9 +130,9 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         ]);
 
         $coordinator = app(KnowledgeChunkSyncCoordinator::class);
-        $this->assertTrue($coordinator->request((int) $knowledgeBase->id));
+        $this->assertTrue($this->requestSync($coordinator, (int) $knowledgeBase->id));
         $firstToken = (string) $knowledgeBase->fresh()->chunk_sync_token;
-        $this->assertTrue($coordinator->request((int) $knowledgeBase->id, force: true));
+        $this->assertTrue($this->requestSync($coordinator, (int) $knowledgeBase->id, force: true));
         $latestToken = (string) $knowledgeBase->fresh()->chunk_sync_token;
 
         $this->assertNotSame($firstToken, $latestToken);
@@ -148,9 +156,12 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             'chunk_sync_status' => 'processing',
             'chunk_sync_token' => 'sync-version-1',
             'chunk_source_hash' => hash('sha256', '新版切片正文。'),
+            'chunk_serving_generation' => 'serving-v0',
+            'chunk_serving_source_hash' => hash('sha256', '旧版正文。'),
         ]);
         KnowledgeChunk::query()->create([
             'knowledge_base_id' => $knowledgeBase->id,
+            'generation_key' => 'serving-v0',
             'chunk_index' => 0,
             'content' => '旧版仍然可检索。',
             'content_hash' => hash('sha256', '旧版仍然可检索。'),
@@ -159,7 +170,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         ]);
 
         $service = app(KnowledgeChunkSyncService::class);
-        $service->prepareStagingSync(
+        $this->prepareSync($service,
             (int) $knowledgeBase->id,
             (string) $knowledgeBase->content,
             'sync-version-1',
@@ -167,10 +178,19 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
 
         $this->assertSame('旧版仍然可检索。', (string) $knowledgeBase->chunks()->value('content'));
 
-        $service->finalizeStagingSync((int) $knowledgeBase->id, 'sync-version-1');
+        $this->finalizeSync($service, (int) $knowledgeBase->id, 'sync-version-1');
 
         $this->assertSame('新版切片正文。', (string) $knowledgeBase->chunks()->value('content'));
-        $this->assertSame('ready', (string) $knowledgeBase->fresh()->chunk_sync_status);
+        $knowledgeBase->refresh();
+        $this->assertSame('ready', (string) $knowledgeBase->chunk_sync_status);
+        $this->assertSame('sync-version-1', $knowledgeBase->chunk_serving_generation);
+        $this->assertSame(hash('sha256', '新版切片正文。'), $knowledgeBase->chunk_serving_source_hash);
+        $this->assertSame(64, strlen((string) $knowledgeBase->chunk_manifest_hash));
+        $this->assertSame(
+            ['sync-version-1'],
+            KnowledgeChunk::query()->where('knowledge_base_id', $knowledgeBase->id)
+                ->distinct()->pluck('generation_key')->all()
+        );
         $this->assertDatabaseCount('knowledge_chunk_sync_rows', 0);
     }
 
@@ -188,14 +208,14 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         ]);
 
         $service = app(KnowledgeChunkSyncService::class);
-        $service->prepareStagingSync(
+        $this->prepareSync($service,
             (int) $knowledgeBase->id,
             (string) $knowledgeBase->content,
             'commit-token',
         );
 
-        $this->assertTrue($service->finalizeStagingSync((int) $knowledgeBase->id, 'commit-token'));
-        $this->assertFalse($service->finalizeStagingSync((int) $knowledgeBase->id, 'commit-token'));
+        $this->assertTrue($this->finalizeSync($service, (int) $knowledgeBase->id, 'commit-token'));
+        $this->assertFalse($this->finalizeSync($service, (int) $knowledgeBase->id, 'commit-token'));
 
         app(KnowledgeChunkSyncCoordinator::class)->markFailed(
             (int) $knowledgeBase->id,
@@ -220,6 +240,9 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             'word_count' => 10,
             'chunk_sync_status' => 'processing',
             'chunk_sync_token' => 'failed-token',
+            'chunk_serving_generation' => 'serving-v1',
+            'chunk_serving_source_hash' => hash('sha256', '当前服务正文'),
+            'chunk_manifest_hash' => hash('sha256', 'current-manifest'),
         ]);
         $coordinator = app(KnowledgeChunkSyncCoordinator::class);
 
@@ -230,7 +253,11 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         );
 
         $this->assertFalse($coordinator->isCurrent((int) $knowledgeBase->id, 'failed-token'));
-        $this->assertSame('failed', $knowledgeBase->fresh()->chunk_sync_status);
+        $knowledgeBase->refresh();
+        $this->assertSame('failed', $knowledgeBase->chunk_sync_status);
+        $this->assertSame('serving-v1', $knowledgeBase->chunk_serving_generation);
+        $this->assertSame(hash('sha256', '当前服务正文'), $knowledgeBase->chunk_serving_source_hash);
+        $this->assertSame(hash('sha256', 'current-manifest'), $knowledgeBase->chunk_manifest_hash);
     }
 
     public function test_stale_pipeline_cannot_replace_the_current_chunks(): void
@@ -256,7 +283,11 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
 
         $this->assertFalse(
             app(KnowledgeChunkSyncService::class)
-                ->finalizeStagingSync((int) $knowledgeBase->id, 'stale-token')
+                ->finalizeStagingSync(
+                    (int) $knowledgeBase->id,
+                    'stale-token',
+                    SystemAiIdentity::knowledgeIndex(),
+                )
         );
         $this->assertSame('当前有效切片。', (string) $knowledgeBase->chunks()->value('content'));
     }
@@ -291,7 +322,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
 
         $this->assertSame(
             1,
-            app(KnowledgeChunkSyncCoordinator::class)->recoverStale(600)
+            $this->recoverSync(app(KnowledgeChunkSyncCoordinator::class), 600)
         );
 
         $knowledgeBase->refresh();
@@ -326,7 +357,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
 
         $this->assertSame(
             0,
-            app(KnowledgeChunkSyncCoordinator::class)->recoverStale(600)
+            $this->recoverSync(app(KnowledgeChunkSyncCoordinator::class), 600)
         );
         $this->assertSame('active-sync-token', $knowledgeBase->fresh()->chunk_sync_token);
         Queue::assertNothingPushed();
@@ -350,6 +381,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             (int) $knowledgeBase->id,
             $content,
             'dense-lines-token',
+            SystemAiIdentity::knowledgeIndex(),
         );
 
         $this->assertGreaterThan(1, $chunkCount);
@@ -382,6 +414,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             (int) $knowledgeBase->id,
             $content,
             'many-headings-token',
+            SystemAiIdentity::knowledgeIndex(),
         );
 
         $expectedCharacterChunks = (int) ceil(mb_strlen($content, 'UTF-8') / 900);
@@ -409,6 +442,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             (int) $knowledgeBase->id,
             $content,
             'near-limit-token',
+            SystemAiIdentity::knowledgeIndex(),
         );
 
         $this->assertGreaterThan(1, $chunkCount);
@@ -439,7 +473,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         ]);
 
         $service = app(KnowledgeChunkSyncService::class);
-        $service->prepareStagingSync(
+        $this->prepareSync($service,
             (int) $knowledgeBase->id,
             $content,
             'no-model-token',
@@ -448,7 +482,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
             ->where('knowledge_base_id', $knowledgeBase->id)
             ->update(['updated_at' => '2020-01-01 00:00:00']);
 
-        $result = $service->embedStagingBatch(
+        $result = $this->embedSync($service,
             (int) $knowledgeBase->id,
             'no-model-token',
             0,
@@ -482,7 +516,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
         ]);
 
         $service = app(KnowledgeChunkSyncService::class);
-        $service->prepareStagingSync(
+        $this->prepareSync($service,
             (int) $knowledgeBase->id,
             $content,
             'fallback-token',
@@ -503,7 +537,7 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
                 'embedding_json' => '[0.1,0.2,0.3]',
             ]);
 
-        $result = $service->embedStagingBatch(
+        $result = $this->embedSync($service,
             (int) $knowledgeBase->id,
             'fallback-token',
             (int) $firstBatchIds->last(),
@@ -523,6 +557,74 @@ class KnowledgeChunkAsyncSyncTest extends TestCase
                 ->where('knowledge_base_id', $knowledgeBase->id)
                 ->where('embedding_dimensions', '>', 0)
                 ->count()
+        );
+    }
+
+    private function requestSync(
+        KnowledgeChunkSyncCoordinator $coordinator,
+        int $knowledgeBaseId,
+        bool $requireRealEmbedding = false,
+        bool $force = false,
+    ): bool {
+        return $coordinator->request(
+            $knowledgeBaseId,
+            SystemAiIdentity::knowledgeIndex(),
+            $requireRealEmbedding,
+            $force,
+        );
+    }
+
+    private function recoverSync(
+        KnowledgeChunkSyncCoordinator $coordinator,
+        int $staleSeconds = 600,
+        int $limit = 50,
+    ): int {
+        return $coordinator->recoverStale(
+            SystemAiIdentity::knowledgeIndex(),
+            $staleSeconds,
+            $limit,
+        );
+    }
+
+    private function prepareSync(
+        KnowledgeChunkSyncService $service,
+        int $knowledgeBaseId,
+        string $content,
+        string $syncToken,
+    ): int {
+        return $service->prepareStagingSync(
+            $knowledgeBaseId,
+            $content,
+            $syncToken,
+            SystemAiIdentity::knowledgeIndex(),
+        );
+    }
+
+    private function embedSync(
+        KnowledgeChunkSyncService $service,
+        int $knowledgeBaseId,
+        string $syncToken,
+        int $afterRowId,
+        bool $requireRealEmbedding = false,
+    ): ?array {
+        return $service->embedStagingBatch(
+            $knowledgeBaseId,
+            $syncToken,
+            $afterRowId,
+            SystemAiIdentity::knowledgeIndex(),
+            $requireRealEmbedding,
+        );
+    }
+
+    private function finalizeSync(
+        KnowledgeChunkSyncService $service,
+        int $knowledgeBaseId,
+        string $syncToken,
+    ): bool {
+        return $service->finalizeStagingSync(
+            $knowledgeBaseId,
+            $syncToken,
+            SystemAiIdentity::knowledgeIndex(),
         );
     }
 }

@@ -5,21 +5,30 @@ namespace Tests\Feature;
 use App\Jobs\PrepareKnowledgeChunkSyncJob;
 use App\Models\Admin;
 use App\Models\AiModel;
+use App\Models\Article;
+use App\Models\Author;
+use App\Models\Category;
 use App\Models\Image;
 use App\Models\ImageLibrary;
+use App\Models\Keyword;
 use App\Models\KeywordLibrary;
 use App\Models\KnowledgeBase;
 use App\Models\Prompt;
+use App\Models\SiteSetting;
 use App\Models\Task;
+use App\Models\Title;
 use App\Models\TitleLibrary;
 use App\Models\UrlImportJob;
 use App\Models\UrlImportJobLog;
 use App\Services\GeoFlow\KnowledgeChunkSyncCoordinator;
 use App\Services\GeoFlow\ManagedImageFileService;
+use App\Services\GeoFlow\UrlImportProcessingService;
+use App\Support\AdminWeb;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
@@ -42,9 +51,9 @@ class AdminMaterialsPagesTest extends TestCase
         $this->withoutMiddleware(ValidateCsrfToken::class);
     }
 
-    private function createReadyUrlImportAiModel(string $apiUrl = 'https://ai.test/v1'): AiModel
+    private function createReadyUrlImportAiModel(Admin $owner, string $apiUrl = 'https://ai.test/v1'): AiModel
     {
-        return AiModel::query()->create([
+        $model = AiModel::query()->create([
             'name' => 'URL Import AI Model',
             'version' => '',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('test-key'),
@@ -57,6 +66,35 @@ class AdminMaterialsPagesTest extends TestCase
             'total_used' => 0,
             'status' => 'active',
         ]);
+        $model->forceFill([
+            'owner_admin_id' => $owner->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_USER_CONTENT,
+        ])->save();
+
+        return $model;
+    }
+
+    private function attachUrlImportIdentity(UrlImportJob $job): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'url_import_commit_'.$job->id,
+            'password' => 'secret-123',
+            'email' => 'url-import-commit-'.$job->id.'@example.com',
+            'display_name' => 'URL Import Commit',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+        $model = $this->createReadyUrlImportAiModel($admin);
+        $job->forceFill([
+            'model_access_admin_id' => $admin->id,
+            'model_access_admin_role' => 'super_admin',
+            'ai_config_access_version' => 1,
+            'requested_ai_model_id' => $model->id,
+            'resolver_policy_version' => 1,
+            'resolved_ai_model_id' => $model->id,
+            'resolved_model_source' => 'personal',
+            'model_resolved_at' => now(),
+        ])->save();
     }
 
     public function test_guest_is_redirected_from_material_pages(): void
@@ -163,6 +201,123 @@ class AdminMaterialsPagesTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.url-import.history'))
             ->assertForbidden();
+    }
+
+    public function test_material_pages_share_the_section_navigation_and_keep_index_actions(): void
+    {
+        config()->set('geoflow.admin_ui_v3_enabled', true);
+
+        $admin = Admin::query()->create([
+            'username' => 'materials_section_navigation_admin',
+            'password' => 'secret-123',
+            'email' => 'materials-section-navigation@example.com',
+            'display_name' => 'Materials Navigation Admin',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+
+        foreach ([
+            route('admin.materials.index') => null,
+            route('admin.knowledge-bases.index') => 'knowledge-bases',
+            route('admin.keyword-libraries.index') => 'keywords',
+            route('admin.title-libraries.index') => 'titles',
+            route('admin.image-libraries.index') => 'images',
+            route('admin.authors.index') => 'authors',
+            route('admin.url-import') => 'url-import',
+        ] as $url => $activeKey) {
+            $response = $this->actingAs($admin, 'admin')->get($url);
+
+            $response
+                ->assertOk()
+                ->assertSee('data-materials-navigation', false)
+                ->assertSee(AdminWeb::routePath('admin.knowledge-bases.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.keyword-libraries.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.title-libraries.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.image-libraries.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.authors.index'), false)
+                ->assertSee(AdminWeb::routePath('admin.url-import'), false);
+
+            $document = new \DOMDocument;
+            $document->loadHTML((string) $response->getContent(), LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_NONET);
+            $xpath = new \DOMXPath($document);
+            $navigation = $xpath->query('//*[@data-materials-navigation]')?->item(0);
+            $items = $xpath->query('.//*[@data-materials-navigation-item]', $navigation);
+            $activeItems = $xpath->query('.//*[@aria-current="page"]', $navigation);
+
+            self::assertNotNull($navigation, $url);
+            self::assertSame(6, $items?->length, $url);
+            self::assertSame(
+                ['knowledge-bases', 'keywords', 'titles', 'images', 'authors', 'url-import'],
+                array_map(
+                    static fn (\DOMNode $item): string => (string) $item->attributes?->getNamedItem('data-materials-navigation-item')?->nodeValue,
+                    iterator_to_array($items),
+                ),
+                $url,
+            );
+            self::assertSame(6, $xpath->query('.//*[@data-materials-navigation-dot]', $navigation)?->length, $url);
+            self::assertSame($activeKey === null ? 0 : 1, $activeItems?->length, $url);
+
+            if ($activeKey !== null) {
+                self::assertSame(
+                    $activeKey,
+                    $activeItems?->item(0)?->attributes?->getNamedItem('data-materials-navigation-item')?->nodeValue,
+                    $url,
+                );
+            }
+
+            if ($activeKey === 'knowledge-bases') {
+                $response
+                    ->assertSee('href="'.route('admin.knowledge-bases.create').'"', false)
+                    ->assertSee('href="'.route('admin.knowledge-bases.create', ['mode' => 'upload']).'"', false);
+            }
+
+            if ($activeKey === 'keywords') {
+                $response->assertSee('href="'.route('admin.keyword-libraries.create').'"', false);
+            }
+
+            if ($activeKey === 'titles') {
+                $response->assertSee('href="'.route('admin.title-libraries.create').'"', false);
+            }
+
+            if ($activeKey === 'images') {
+                $response->assertSee('href="'.route('admin.image-libraries.create').'"', false);
+            }
+
+            if ($activeKey === 'authors') {
+                $response->assertSee('href="'.route('admin.authors.create').'"', false);
+            }
+
+            if ($activeKey === 'url-import') {
+                $response->assertSee('href="'.route('admin.url-import.history').'"', false);
+            }
+        }
+
+        foreach (['zh_CN', 'en', 'ja', 'es', 'ru', 'pt_BR'] as $locale) {
+            App::setLocale($locale);
+
+            foreach (['knowledge_bases', 'keyword_libraries', 'title_libraries', 'image_libraries', 'author_manage', 'url_import'] as $key) {
+                self::assertNotSame('admin.materials.'.$key, __('admin.materials.'.$key), $locale.': '.$key);
+            }
+        }
+    }
+
+    public function test_title_library_creation_uses_the_standalone_form_page(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'title_library_create_admin',
+            'password' => 'secret-123',
+            'email' => 'title-library-create-admin@example.com',
+            'display_name' => 'Title Library Create Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.title-libraries.index'))
+            ->assertOk()
+            ->assertSee('href="'.route('admin.title-libraries.create').'"', false)
+            ->assertDontSee('showCreateModal()', false)
+            ->assertDontSee('id="create-modal"', false);
     }
 
     public function test_materials_page_counts_high_risk_unreviewed_knowledge_as_pending(): void
@@ -698,6 +853,55 @@ class AdminMaterialsPagesTest extends TestCase
         ]);
     }
 
+    public function test_admin_cannot_delete_knowledge_base_referenced_by_independent_article_quality_configuration(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'knowledge_delete_article_admin',
+            'password' => 'secret-123',
+            'email' => 'knowledge-delete-article-admin@example.com',
+            'display_name' => 'Knowledge Delete Article Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+        $knowledgeBase = KnowledgeBase::query()->create([
+            'name' => '被独立文章引用知识库',
+            'description' => '',
+            'content' => '独立文章的质检知识库引用需要阻止删除。',
+            'character_count' => 20,
+            'file_type' => 'markdown',
+            'word_count' => 20,
+        ]);
+        $category = Category::query()->create([
+            'name' => '知识库删除保护',
+            'slug' => 'knowledge-delete-protection',
+        ]);
+        $author = Author::query()->create(['name' => '知识库删除保护作者']);
+        $article = Article::query()->create([
+            'title' => '独立文章质检知识库删除保护',
+            'slug' => 'independent-article-quality-knowledge-delete-protection',
+            'content' => '文章正文。',
+            'category_id' => (int) $category->id,
+            'author_id' => (int) $author->id,
+            'status' => 'draft',
+            'review_status' => 'pending',
+        ]);
+        $article->aiQualityKnowledgeBases()->attach((int) $knowledgeBase->id, ['sort_order' => 0]);
+
+        $this->actingAs($admin, 'admin')
+            ->from(route('admin.knowledge-bases.index'))
+            ->post(route('admin.knowledge-bases.delete', ['knowledgeBaseId' => (int) $knowledgeBase->id]))
+            ->assertRedirect(route('admin.knowledge-bases.index'))
+            ->assertSessionHasErrors();
+
+        $this->assertDatabaseHas('knowledge_bases', [
+            'id' => (int) $knowledgeBase->id,
+        ]);
+        $this->assertDatabaseHas('article_ai_quality_knowledge_bases', [
+            'article_id' => (int) $article->id,
+            'knowledge_base_id' => (int) $knowledgeBase->id,
+        ]);
+    }
+
     public function test_admin_can_refresh_knowledge_chunks_with_real_embedding_model(): void
     {
         Http::fake([
@@ -713,11 +917,13 @@ class AdminMaterialsPagesTest extends TestCase
             'password' => 'secret-123',
             'email' => 'knowledge-refresh-admin@example.com',
             'display_name' => 'Knowledge Refresh Admin',
-            'role' => 'admin',
+            'role' => 'super_admin',
             'status' => 'active',
         ]);
 
-        $embeddingModel = AiModel::query()->create([
+        $embeddingModel = new AiModel;
+        $embeddingModel->forceFill([
+            'owner_admin_id' => $admin->id,
             'name' => 'Test Embedding',
             'version' => '',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('test-api-key'),
@@ -729,7 +935,12 @@ class AdminMaterialsPagesTest extends TestCase
             'used_today' => 0,
             'total_used' => 0,
             'status' => 'active',
-        ]);
+            'access_scope' => AiModel::ACCESS_SCOPE_SYSTEM_ONLY,
+        ])->save();
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => 'default_embedding_model_id'],
+            ['setting_value' => (string) $embeddingModel->id],
+        );
 
         $knowledgeBase = KnowledgeBase::query()->create([
             'name' => '待向量化知识库',
@@ -793,10 +1004,13 @@ class AdminMaterialsPagesTest extends TestCase
         $this->actingAs($admin, 'admin')
             ->get(route('admin.knowledge-bases.index'))
             ->assertOk()
-            ->assertSee('data-knowledge-refresh-modal', false)
+            ->assertSee('data-admin-action-dialog', false)
             ->assertSee('data-refresh-chunks-form', false)
+            ->assertSee('data-dialog-title="'.__('admin.knowledge_bases.refresh_confirm_title').'"', false)
+            ->assertSee('data-refresh-submit-button disabled aria-disabled="true"', false)
             ->assertSee('data-refresh-progress', false)
             ->assertSee(__('admin.knowledge_bases.refresh_confirm_title'))
+            ->assertDontSee('data-knowledge-refresh-modal', false)
             ->assertSee(__('admin.knowledge_bases.refresh_progress_initial'))
             ->assertDontSee(__('admin.knowledge_bases.confirm_refresh_chunks', ['name' => '待更新切片知识库']));
     }
@@ -852,7 +1066,7 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $this->createReadyUrlImportAiModel($admin);
 
         $response = $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -983,7 +1197,7 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $this->createReadyUrlImportAiModel($admin);
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1026,6 +1240,82 @@ class AdminMaterialsPagesTest extends TestCase
             'id' => (int) $job->id,
             'current_step' => 'imported',
         ]);
+    }
+
+    public function test_url_import_commit_skips_null_keywords_and_titles_that_expand_past_storage_limit(): void
+    {
+        $result = [
+            'page' => [
+                'title' => 'Policy Import',
+                'text' => '可用的知识库正文',
+            ],
+            'analysis' => [
+                'library_name' => 'Policy Import',
+                'summary' => '导入策略测试',
+                'knowledge_markdown' => '# Policy Import',
+                'keywords' => ['有效关键词', "bad\0keyword", "boundary-null\0", '0', '0e1'],
+                'titles' => [str_repeat('ﬃ', 500), '有效标题', '0', '0e1'],
+            ],
+            'import' => [
+                'status' => 'preview',
+                'summary' => null,
+            ],
+        ];
+        $job = UrlImportJob::query()->create([
+            'url' => 'https://example.test/policy',
+            'normalized_url' => 'https://example.test/policy',
+            'source_domain' => 'example.test',
+            'page_title' => 'Policy Import',
+            'status' => 'completed',
+            'current_step' => 'preview',
+            'progress_percent' => 100,
+            'result_json' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'created_by' => 'policy-test',
+        ]);
+
+        $this->attachUrlImportIdentity($job);
+        $summary = app(UrlImportProcessingService::class)->commit($job);
+
+        $this->assertSame(3, $summary['keywords']);
+        $this->assertSame(3, $summary['titles']);
+        $this->assertSame(['有效关键词', '0', '0e1'], Keyword::query()->orderBy('id')->pluck('keyword')->all());
+        $this->assertSame(['有效标题', '0', '0e1'], Title::query()->orderBy('id')->pluck('title')->all());
+    }
+
+    public function test_url_import_commit_rejects_a_preview_without_any_storable_title(): void
+    {
+        $job = UrlImportJob::query()->create([
+            'url' => 'https://example.test/invalid-titles',
+            'normalized_url' => 'https://example.test/invalid-titles',
+            'source_domain' => 'example.test',
+            'page_title' => 'Invalid Titles',
+            'status' => 'completed',
+            'current_step' => 'preview',
+            'progress_percent' => 100,
+            'result_json' => json_encode([
+                'page' => ['title' => 'Invalid Titles', 'text' => '可用正文'],
+                'analysis' => [
+                    'library_name' => 'Invalid Titles',
+                    'knowledge_markdown' => '# Invalid Titles',
+                    'keywords' => ['有效关键词'],
+                    'titles' => [str_repeat('ﬃ', 500)],
+                ],
+                'import' => ['status' => 'preview', 'summary' => null],
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            'created_by' => 'policy-test',
+        ]);
+
+        try {
+            $this->attachUrlImportIdentity($job);
+            app(UrlImportProcessingService::class)->commit($job);
+            $this->fail('Expected an import without storable titles to be rejected.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(__('admin.url_import.error.ai_titles_missing'), $exception->getMessage());
+        }
+
+        $this->assertDatabaseCount('knowledge_bases', 0);
+        $this->assertDatabaseCount('keyword_libraries', 0);
+        $this->assertDatabaseCount('title_libraries', 0);
     }
 
     public function test_url_import_analysis_prefers_active_ai_model_and_backend_prompts(): void
@@ -1110,7 +1400,7 @@ class AdminMaterialsPagesTest extends TestCase
             'content' => '请生成真实可信内容',
             'variables' => '',
         ]);
-        AiModel::query()->create([
+        $urlImportModel = AiModel::query()->create([
             'name' => 'AI Test Model',
             'version' => '',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('test-key'),
@@ -1132,6 +1422,10 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
+        $urlImportModel->forceFill([
+            'owner_admin_id' => $admin->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_USER_CONTENT,
+        ])->save();
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1191,7 +1485,7 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $this->createReadyUrlImportAiModel($admin);
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1249,7 +1543,7 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $this->createReadyUrlImportAiModel($admin);
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1280,7 +1574,7 @@ class AdminMaterialsPagesTest extends TestCase
                 200,
                 ['Content-Type' => 'text/html; charset=utf-8']
             ),
-            'https://bad.test/v1/chat/completions' => Http::response(['detail' => 'API Key 无效'], 401),
+            'https://bad.test/v1/chat/completions' => Http::response(['detail' => 'temporary upstream failure'], 503),
             'https://ai.test/v1/chat/completions' => Http::sequence()
                 ->push(['choices' => [['message' => ['content' => json_encode([
                     'clean_title' => 'GEO 采集页',
@@ -1309,7 +1603,7 @@ class AdminMaterialsPagesTest extends TestCase
             'status' => 'active',
         ]);
 
-        AiModel::query()->create([
+        $badModel = AiModel::query()->create([
             'name' => 'Bad Model',
             'version' => '',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('bad-key'),
@@ -1322,7 +1616,11 @@ class AdminMaterialsPagesTest extends TestCase
             'total_used' => 0,
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $badModel->forceFill([
+            'owner_admin_id' => $admin->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_USER_CONTENT,
+        ])->save();
+        $this->createReadyUrlImportAiModel($admin);
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1387,7 +1685,7 @@ class AdminMaterialsPagesTest extends TestCase
             'role' => 'super_admin',
             'status' => 'active',
         ]);
-        $this->createReadyUrlImportAiModel();
+        $this->createReadyUrlImportAiModel($admin);
 
         $this->actingAs($admin, 'admin')
             ->post(route('admin.url-import.store'), [
@@ -1488,6 +1786,46 @@ class AdminMaterialsPagesTest extends TestCase
             ->assertSee(__('admin.knowledge_detail.heading'));
     }
 
+    public function test_knowledge_editor_exposes_a_left_heading_navigation_tree(): void
+    {
+        $admin = Admin::query()->create([
+            'username' => 'knowledge_outline_admin',
+            'password' => 'secret-123',
+            'email' => 'knowledge-outline-admin@example.com',
+            'display_name' => 'Knowledge Outline Admin',
+            'role' => 'admin',
+            'status' => 'active',
+        ]);
+
+        $knowledgeBase = KnowledgeBase::query()->create([
+            'name' => '目录导航知识库',
+            'description' => '验证 Markdown 目录导航。',
+            'content' => "# 一级标题\n\n## 二级标题\n\n### 三级标题\n\n#### 四级标题",
+            'character_count' => 31,
+            'used_task_count' => 0,
+            'file_type' => 'markdown',
+            'file_path' => '',
+            'word_count' => 4,
+            'usage_count' => 0,
+        ]);
+
+        $this->actingAs($admin, 'admin')
+            ->get(route('admin.knowledge-bases.detail', ['knowledgeBaseId' => (int) $knowledgeBase->id]))
+            ->assertOk()
+            ->assertSee('outline: {', false)
+            ->assertSee('enable: true', false)
+            ->assertSee("position: 'left'", false)
+            ->assertSee('data-knowledge-outline-levels="1,2,3,4"', false)
+            ->assertSee('.knowledge-markdown-editor:not(.vditor--fullscreen) .vditor-outline {', false)
+            ->assertSeeInOrder([
+                '.knowledge-markdown-editor.vditor {',
+                'background: #fff;',
+                'border: 0;',
+                '.knowledge-markdown-editor.vditor--fullscreen {',
+                'border-radius: 0;',
+            ], false);
+    }
+
     public function test_admin_can_manage_keyword_and_title_details(): void
     {
         $admin = Admin::query()->create([
@@ -1549,6 +1887,7 @@ class AdminMaterialsPagesTest extends TestCase
 
     public function test_admin_can_upload_image_and_knowledge_file_from_detail_flow(): void
     {
+        Storage::fake('local');
         Storage::fake('public');
 
         $admin = Admin::query()->create([

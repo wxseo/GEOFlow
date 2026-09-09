@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
+use App\Models\Admin;
 use App\Models\AiModel;
 use App\Models\AiSourceProvider;
 use App\Models\AiVisibilityRun;
@@ -10,6 +11,7 @@ use App\Models\SiteSetting;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class GeoFlowAiVisibilityCollectCommandTest extends TestCase
@@ -18,6 +20,7 @@ class GeoFlowAiVisibilityCollectCommandTest extends TestCase
 
     public function test_command_collects_search_and_deepseek_analysis_with_saved_bindings(): void
     {
+        Queue::fake();
         Http::preventStrayRequests();
         Http::fake([
             'https://open.feedcoopapi.com/search_api/web_search' => Http::response([
@@ -43,7 +46,18 @@ class GeoFlowAiVisibilityCollectCommandTest extends TestCase
             'status' => 'active',
             'daily_limit' => 10,
         ]);
-        $model = AiModel::query()->create([
+        $owner = Admin::query()->create([
+            'username' => 'visibility_system_owner',
+            'password' => 'secret-123',
+            'email' => 'visibility-system-owner@example.com',
+            'display_name' => 'Visibility System Owner',
+            'role' => 'super_admin',
+            'status' => 'active',
+        ]);
+        $model = new AiModel;
+        $model->forceFill([
+            'owner_admin_id' => $owner->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_SYSTEM_ONLY,
             'name' => 'DeepSeek Analysis',
             'version' => 'test',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('deepseek-key'),
@@ -53,7 +67,7 @@ class GeoFlowAiVisibilityCollectCommandTest extends TestCase
             'failover_priority' => 10,
             'daily_limit' => 10,
             'status' => 'active',
-        ]);
+        ])->save();
         SiteSetting::query()->create([
             'setting_key' => 'ai_visibility_deepseek_analysis_model_id',
             'setting_value' => (string) $model->id,

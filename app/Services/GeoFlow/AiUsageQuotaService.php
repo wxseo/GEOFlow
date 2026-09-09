@@ -10,15 +10,15 @@ use Throwable;
 
 final class AiUsageQuotaService
 {
-    public function reserveModel(AiModel $model): ?AiUsageReservation
+    public function reserveModel(AiModel $model, int $minimumRemaining = 0): ?AiUsageReservation
     {
-        return DB::transaction(function () use ($model): ?AiUsageReservation {
+        return DB::transaction(function () use ($model, $minimumRemaining): ?AiUsageReservation {
             $locked = AiModel::query()->lockForUpdate()->find((int) $model->id);
             if (! $locked instanceof AiModel || (string) ($locked->status ?? 'inactive') !== 'active') {
                 return null;
             }
 
-            return $this->reserveLockedModel($locked);
+            return $this->reserveLockedModel($locked, $minimumRemaining);
         });
     }
 
@@ -35,6 +35,15 @@ final class AiUsageQuotaService
 
             return $this->reserveLockedModel($locked);
         });
+    }
+
+    public function reserveLockedModelForTest(AiModel $lockedModel): ?AiUsageReservation
+    {
+        if (DB::connection()->transactionLevel() < 1) {
+            throw new \LogicException('A locked model reservation requires an active transaction.');
+        }
+
+        return $this->reserveLockedModel($lockedModel);
     }
 
     public function releaseModel(AiUsageReservation $reservation): void
@@ -79,6 +88,23 @@ final class AiUsageQuotaService
         $this->finalizeReservation($reservation, static function (): void {});
     }
 
+    /**
+     * 完成一次已发起外部请求的模型连接检测，并计入真实外呼总量。
+     */
+    public function recordModelOutboundAttempt(AiUsageReservation $reservation): void
+    {
+        if ($reservation->resourceType !== 'model') {
+            throw new \InvalidArgumentException('Expected an AI model usage reservation.');
+        }
+
+        $this->finalizeReservation($reservation, static function () use ($reservation): void {
+            AiModel::query()->whereKey($reservation->resourceId)->update([
+                'total_used' => DB::raw('COALESCE(total_used, 0) + 1'),
+                'updated_at' => now(),
+            ]);
+        });
+    }
+
     public function reserveProvider(AiSourceProvider $provider): ?AiUsageReservation
     {
         return DB::transaction(function () use ($provider): ?AiUsageReservation {
@@ -89,6 +115,15 @@ final class AiUsageQuotaService
 
             return $this->reserveLockedProvider($locked);
         });
+    }
+
+    public function reserveLockedProviderForTest(AiSourceProvider $lockedProvider): ?AiUsageReservation
+    {
+        if (DB::connection()->transactionLevel() < 1) {
+            throw new \LogicException('A locked provider reservation requires an active transaction.');
+        }
+
+        return $this->reserveLockedProvider($lockedProvider);
     }
 
     public function releaseProvider(AiUsageReservation $reservation): void
@@ -133,12 +168,13 @@ final class AiUsageQuotaService
         $this->finalizeReservation($reservation, static function (): void {});
     }
 
-    private function reserveLockedModel(AiModel $model): ?AiUsageReservation
+    private function reserveLockedModel(AiModel $model, int $minimumRemaining = 0): ?AiUsageReservation
     {
         $usageDate = now()->toDateString();
         $usedToday = $this->usedOnDate($model->usage_date, (int) ($model->used_today ?? 0), $usageDate);
         $dailyLimit = (int) ($model->daily_limit ?? 0);
-        if ($dailyLimit > 0 && $usedToday >= $dailyLimit) {
+        $minimumRemaining = max(0, $minimumRemaining);
+        if ($dailyLimit > 0 && ($dailyLimit - $usedToday) <= $minimumRemaining) {
             return null;
         }
 

@@ -25,6 +25,7 @@ use GuzzleHttp\Psr7\Response as PsrResponse;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Http\Client\Request as LaravelRequest;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -47,6 +48,29 @@ class SafeOutboundHttpClientTest extends TestCase
     public function the_application_container_resolves_the_safe_gateway(): void
     {
         $this->assertInstanceOf(SafeOutboundHttpClient::class, app(SafeOutboundHttpClient::class));
+    }
+
+    #[Test]
+    public function a_before_transport_domain_exception_is_not_wrapped_or_sent(): void
+    {
+        $transport = new RecordingOutboundTransport;
+        $client = $this->client(['public.test' => ['93.184.216.34']], $transport);
+        $exception = new \DomainException('governance_preflight_failed');
+
+        try {
+            $client->post(
+                Http::timeout(2),
+                'https://public.test/v1/models',
+                ['model' => 'test'],
+                1024,
+                static fn (): never => throw $exception,
+            );
+            $this->fail('Expected the pre-transport domain exception to escape unchanged.');
+        } catch (\DomainException $caught) {
+            $this->assertSame($exception, $caught);
+        }
+
+        $this->assertCount(0, $transport->targets);
     }
 
     /**
@@ -428,7 +452,7 @@ class SafeOutboundHttpClientTest extends TestCase
         $this->assertSame('identity', $final['request']->getHeaderLine('Accept-Encoding'));
         $this->assertFalse($final['options']['allow_redirects']);
         $this->assertFalse($final['options']['decode_content']);
-        $this->assertFalse($final['options']['stream']);
+        $this->assertTrue($final['options']['stream']);
         $this->assertTrue($final['options']['verify']);
         $this->assertSame('', $final['options']['proxy']);
         $this->assertSame('v4', $final['options']['force_ip_resolve']);
@@ -584,7 +608,7 @@ class SafeOutboundHttpClientTest extends TestCase
         $this->assertSame('identity', $captured['request']->getHeaderLine('Accept-Encoding'));
         $this->assertFalse($captured['options']['allow_redirects']);
         $this->assertFalse($captured['options']['decode_content']);
-        $this->assertFalse($captured['options']['stream']);
+        $this->assertTrue($captured['options']['stream']);
         $this->assertTrue($captured['options']['verify']);
         $this->assertSame('', $captured['options']['proxy']);
         $this->assertSame(9, $captured['options']['timeout']);
@@ -1319,7 +1343,7 @@ class SafeOutboundHttpClientTest extends TestCase
     }
 
     #[Test]
-    public function direct_http_facade_limits_unknown_size_streaming_responses_while_forcing_the_terminal_to_non_streaming_mode(): void
+    public function direct_http_facade_limits_unknown_size_streaming_responses_without_buffering_the_terminal_response(): void
     {
         config(['geoflow.outbound_ai_max_bytes' => 1024]);
         $terminalStreamOption = null;
@@ -1345,7 +1369,7 @@ class SafeOutboundHttpClientTest extends TestCase
         $response = Http::withOptions(['stream' => true])->get('https://public.test/v1/models');
         $body = $response->toPsrResponse()->getBody();
 
-        $this->assertFalse($terminalStreamOption);
+        $this->assertTrue($terminalStreamOption);
         $this->assertInstanceOf(ResponseSizeLimitedStream::class, $body);
         $this->assertSame(str_repeat('x', 1024), $body->read(1024));
 
@@ -1786,7 +1810,58 @@ class SafeOutboundHttpClientTest extends TestCase
             $this->assertStringNotContainsString('super-secret', $exception->getMessage());
             $this->assertStringNotContainsString('10.0.0.9', $exception->getMessage());
             $this->assertStringNotContainsString('secret.test', $exception->getMessage());
+            $this->assertInstanceOf(\RuntimeException::class, $exception->getPrevious());
+            $this->assertSame(\RuntimeException::class, $exception->causeType);
+            $this->assertStringNotContainsString('TLS failed', (string) $exception->getPrevious()?->getMessage());
+            $this->assertStringNotContainsString('super-secret', (string) $exception->getPrevious()?->getMessage());
         }
+    }
+
+    #[Test]
+    public function transport_timeout_failures_retain_a_safe_machine_readable_category(): void
+    {
+        $exception = new OutboundRequestFailedException(
+            new \RuntimeException('cURL error 28: Operation timed out after 160000 milliseconds api_key=super-secret'),
+        );
+
+        $this->assertSame('timeout', $exception->transportCategory);
+        $this->assertStringNotContainsString('super-secret', $exception->getMessage());
+        $this->assertStringNotContainsString('super-secret', (string) $exception->getPrevious()?->getMessage());
+    }
+
+    #[Test]
+    public function transport_tls_failures_are_not_misclassified_as_dns_errors(): void
+    {
+        $exception = new OutboundRequestFailedException(
+            new \RuntimeException('cURL error 60: certificate validation failed'),
+        );
+
+        $this->assertSame('tls', $exception->transportCategory);
+    }
+
+    #[Test]
+    public function provider_http_failures_retain_safe_status_code_and_quota_category(): void
+    {
+        $response = new Response(new PsrResponse(
+            402,
+            ['Content-Type' => 'application/json'],
+            json_encode([
+                'error' => [
+                    'type' => 'unknown_error',
+                    'code' => 'invalid_request_error',
+                    'message' => 'Insufficient Balance api_key=super-secret',
+                ],
+            ], JSON_THROW_ON_ERROR),
+        ));
+        $exception = new OutboundRequestFailedException(
+            new RequestException($response),
+        );
+
+        $this->assertSame(402, $exception->httpStatus);
+        $this->assertSame('invalid_request_error', $exception->providerCode);
+        $this->assertSame('quota_exhausted', $exception->providerCategory);
+        $this->assertStringNotContainsString('super-secret', $exception->getMessage());
+        $this->assertStringNotContainsString('Insufficient Balance', (string) $exception->getPrevious()?->getMessage());
     }
 
     /** @return array<int, mixed> */

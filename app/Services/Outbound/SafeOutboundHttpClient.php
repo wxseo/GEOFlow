@@ -74,9 +74,14 @@ final class SafeOutboundHttpClient
     }
 
     /** @param array<string, mixed> $data */
-    public function post(PendingRequest $request, string $url, array $data, int $maxBytes): Response
-    {
-        return $this->send($request, 'POST', $url, $data, $maxBytes);
+    public function post(
+        PendingRequest $request,
+        string $url,
+        array $data,
+        int $maxBytes,
+        ?callable $beforeTransport = null,
+    ): Response {
+        return $this->send($request, 'POST', $url, $data, $maxBytes, beforeTransport: $beforeTransport);
     }
 
     /** @param array<string, mixed> $data */
@@ -96,6 +101,7 @@ final class SafeOutboundHttpClient
         int $maxBytes,
         int $maxRedirects = 0,
         ?callable $redirectValidator = null,
+        ?callable $beforeTransport = null,
     ): Response {
         if ($maxBytes < 1 || $maxRedirects < 0 || $maxRedirects > 3) {
             throw new OutboundRequestBlockedException('invalid_request_policy');
@@ -118,12 +124,16 @@ final class SafeOutboundHttpClient
                 }
             }
 
+            if ($beforeTransport !== null) {
+                $beforeTransport();
+            }
+
             try {
                 $response = $this->transport->send($currentRequest, $method, $target, $currentData, $maxBytes, $crossOrigin);
             } catch (OutboundRequestBlockedException|OutboundRequestFailedException $exception) {
                 throw $exception;
-            } catch (\Throwable) {
-                throw new OutboundRequestFailedException;
+            } catch (\Throwable $exception) {
+                throw new OutboundRequestFailedException($exception);
             }
             $this->assertResponseSize($response, $maxBytes);
 
@@ -165,8 +175,8 @@ final class SafeOutboundHttpClient
         }
         try {
             $addresses = $ipLiteral ? [$host] : $this->resolver->resolve($host);
-        } catch (\Throwable) {
-            throw new OutboundRequestFailedException;
+        } catch (\Throwable $exception) {
+            throw new OutboundRequestFailedException($exception);
         }
         $addresses = array_values(array_unique(array_map(static fn (mixed $ip): string => strtolower(trim((string) $ip)), $addresses)));
         if ($addresses === [] || in_array('', $addresses, true)) {

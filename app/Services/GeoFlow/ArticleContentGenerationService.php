@@ -3,12 +3,16 @@
 namespace App\Services\GeoFlow;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
+use App\Exceptions\AiModelAccessException;
 use App\Models\AiModel;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use App\Support\GeoFlow\OpenAiRuntimeProvider;
+use Closure;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
 use Laravel\Ai\Responses\StreamableAgentResponse;
+use Laravel\Ai\Streaming\Events\TextDelta;
+use Laravel\Ai\Streaming\Events\TextEnd;
 use RuntimeException;
 use Throwable;
 
@@ -19,7 +23,7 @@ final class ArticleContentGenerationService
         private readonly AiUsageQuotaService $usageQuota,
     ) {}
 
-    public function generate(AiModel $aiModel, string $prompt): AgentResponse
+    public function generate(AiModel $aiModel, string $prompt, ?Closure $beforeProvider = null): AgentResponse
     {
         [$agent, $providerName, $modelId, $providerUrl] = $this->resolveRuntime($aiModel, 'article_content');
 
@@ -29,6 +33,7 @@ final class ArticleContentGenerationService
         }
 
         try {
+            $beforeProvider?->__invoke($aiModel);
             $response = $agent->prompt($prompt, [], $providerName, $modelId);
         } catch (Throwable $exception) {
             $this->releaseDailyUsage($reservation);
@@ -40,7 +45,13 @@ final class ArticleContentGenerationService
             );
         }
 
-        if (OpenAiRuntimeProvider::normalizeGeneratedText((string) ($response->text ?? '')) === '') {
+        $normalized = OpenAiRuntimeProvider::normalizeGeneratedText($response->text);
+        $content = ArticleReasoningFilter::clean($normalized);
+        if ($content !== $normalized) {
+            $response->text = $content;
+        }
+
+        if (trim($content) === '') {
             $this->releaseDailyUsage($reservation);
 
             return $response;
@@ -51,16 +62,78 @@ final class ArticleContentGenerationService
         return $response;
     }
 
-    public function stream(AiModel $aiModel, string $prompt): StreamableAgentResponse
+    public function stream(
+        AiModel $aiModel,
+        string $prompt,
+        ?Closure $beforeSuccess = null,
+    ): StreamableAgentResponse {
+        $session = $this->deferredStream($aiModel, $prompt);
+        $upstream = $session->stream;
+
+        return new StreamableAgentResponse(
+            $upstream->invocationId,
+            function () use ($upstream, $session, $beforeSuccess): iterable {
+                try {
+                    foreach ($upstream as $event) {
+                        yield $event;
+                    }
+
+                    if (OpenAiRuntimeProvider::normalizeGeneratedText((string) ($upstream->text ?? '')) === '') {
+                        return;
+                    }
+
+                    $beforeSuccess?->__invoke();
+                    $session->complete();
+                } finally {
+                    $session->abort();
+                }
+            },
+            $session->meta,
+        );
+    }
+
+    public function deferredStream(AiModel $aiModel, string $prompt): ArticleContentStreamSession
     {
-        [$agent, $providerName, $modelId, $providerUrl] = $this->resolveRuntime($aiModel, 'article_editor');
+        $runtime = $this->resolveRuntime($aiModel, 'article_editor');
 
         $reservation = $this->reserveDailyUsage($aiModel);
         if ($reservation === null) {
             throw new RuntimeException('AI 模型不可用或已达到今日调用上限');
         }
 
+        return $this->deferredStreamWithRuntime($prompt, $runtime, $reservation);
+    }
+
+    public function deferredStreamWithReservation(
+        AiModel $aiModel,
+        string $prompt,
+        AiUsageReservation $reservation,
+        ?Closure $beforeProvider = null,
+    ): ArticleContentStreamSession {
         try {
+            $runtime = $this->resolveRuntime($aiModel, 'article_editor');
+        } catch (Throwable $exception) {
+            $this->releaseDailyUsage($reservation);
+
+            throw $exception;
+        }
+
+        return $this->deferredStreamWithRuntime($prompt, $runtime, $reservation, $beforeProvider);
+    }
+
+    /**
+     * @param  array{MarkdownContentWriterAgent,string,string,string}  $runtime
+     */
+    private function deferredStreamWithRuntime(
+        string $prompt,
+        array $runtime,
+        AiUsageReservation $reservation,
+        ?Closure $beforeProvider = null,
+    ): ArticleContentStreamSession {
+        [$agent, $providerName, $modelId, $providerUrl] = $runtime;
+
+        try {
+            $beforeProvider?->__invoke();
             $upstream = $agent->stream($prompt, [], $providerName, $modelId);
         } catch (Throwable $exception) {
             $this->releaseDailyUsage($reservation);
@@ -72,38 +145,60 @@ final class ArticleContentGenerationService
             );
         }
 
-        return new StreamableAgentResponse(
+        $stream = new StreamableAgentResponse(
             $upstream->invocationId,
             function () use ($upstream, $reservation, $providerUrl): iterable {
-                $completed = false;
+                $streamEnded = false;
+                $filters = [];
+                $lastDeltas = [];
 
                 try {
                     foreach ($upstream as $event) {
+                        if ($event instanceof TextDelta) {
+                            $filter = $filters[$event->messageId] ??= new ArticleReasoningFilter;
+                            $lastDeltas[$event->messageId] = $event;
+                            $event = clone $event;
+                            $event->delta = $filter->push($event->delta);
+                            if ($event->delta === '') {
+                                continue;
+                            }
+                        } elseif ($event instanceof TextEnd && isset($filters[$event->messageId])) {
+                            $remaining = $filters[$event->messageId]->finish();
+                            if ($remaining !== '') {
+                                $lastDelta = clone $lastDeltas[$event->messageId];
+                                $lastDelta->delta = $remaining;
+                                yield $lastDelta;
+                            }
+                            unset($filters[$event->messageId], $lastDeltas[$event->messageId]);
+                        }
+
                         yield $event;
                     }
-
-                    $completed = true;
+                    $streamEnded = true;
                 } catch (Throwable $exception) {
+                    if ($exception instanceof AiModelAccessException) {
+                        throw $exception;
+                    }
+
                     throw new RuntimeException(
                         'AI 生成失败: '.OpenAiRuntimeProvider::normalizeApiException($exception, $providerUrl),
                         0,
                         $exception,
                     );
                 } finally {
-                    if (! $completed) {
+                    if (! $streamEnded) {
                         $this->releaseDailyUsage($reservation);
                     }
                 }
-
-                if (OpenAiRuntimeProvider::normalizeGeneratedText((string) ($upstream->text ?? '')) === '') {
-                    $this->releaseDailyUsage($reservation);
-
-                    return;
-                }
-
-                $this->recordSuccessfulUsage($reservation);
             },
             new Meta($providerName, $modelId),
+        );
+
+        return new ArticleContentStreamSession(
+            $stream,
+            new Meta($providerName, $modelId),
+            fn () => $this->recordSuccessfulUsage($reservation),
+            fn () => $this->releaseDailyUsage($reservation),
         );
     }
 
@@ -114,7 +209,12 @@ final class ArticleContentGenerationService
             return $configured;
         }
 
-        return max(256, (int) config('geoflow.content_max_tokens', 8192));
+        return max(256, (int) config('geoflow.content_max_tokens', 16384));
+    }
+
+    public function providerTimeoutSeconds(): int
+    {
+        return MarkdownContentWriterAgent::PROVIDER_TIMEOUT_SECONDS;
     }
 
     /**
@@ -167,9 +267,12 @@ final class ArticleContentGenerationService
 
         $driver = OpenAiRuntimeProvider::resolveChatDriver($providerUrl, $modelId);
         $providerName = OpenAiRuntimeProvider::registerProvider($registrySlot, $driver, $providerUrl, $apiKey);
+        $host = strtolower((string) parse_url($providerUrl, PHP_URL_HOST));
+        $separateReasoning = in_array($host, ['api.minimaxi.com', 'api.minimax.io', 'api.minimax.cn'], true)
+            && str_starts_with(strtolower($modelId), 'minimax-m');
 
         return [
-            new MarkdownContentWriterAgent(maxTokens: $this->maxTokens($aiModel)),
+            new MarkdownContentWriterAgent(maxTokens: $this->maxTokens($aiModel), separateReasoning: $separateReasoning),
             $providerName,
             $modelId,
             $providerUrl,

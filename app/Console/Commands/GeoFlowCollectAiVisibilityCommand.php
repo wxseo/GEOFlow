@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Data\Ai\SystemAiIdentity;
+use App\Jobs\DetectAiVisibilityCompetitorsJob;
 use App\Services\GeoFlow\AiVisibility\AiVisibilityCollectionService;
 use Illuminate\Console\Command;
 use Throwable;
@@ -25,9 +27,15 @@ class GeoFlowCollectAiVisibilityCommand extends Command
         }
 
         $failed = 0;
+        $identity = SystemAiIdentity::forVisibilityCollection();
         foreach ($keywords as $keyword) {
             try {
-                $runs = $collection->collect($keyword);
+                $runs = $collection->collect($identity, $keyword);
+                foreach ($runs as $run) {
+                    if (trim((string) $run->answer_text) !== '') {
+                        DetectAiVisibilityCompetitorsJob::dispatch((int) $run->id);
+                    }
+                }
                 $this->info(sprintf('AI visibility collected: keyword=%s, runs=%d', $keyword, count($runs)));
             } catch (Throwable $exception) {
                 report($exception);

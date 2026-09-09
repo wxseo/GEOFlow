@@ -3,9 +3,13 @@
 namespace Tests\Feature;
 
 use App\Ai\Agents\MarkdownContentWriterAgent;
+use App\Data\Ai\SystemAiIdentity;
+use App\Models\Admin;
 use App\Models\AiModel;
 use App\Models\AiSourceProvider;
 use App\Models\AiVisibilityRun;
+use App\Models\SiteSetting;
+use App\Services\GeoFlow\AiVisibility\AiVisibilityConfigurationResolver;
 use App\Services\GeoFlow\AiVisibility\AiVisibilityService;
 use App\Support\GeoFlow\ApiKeyCrypto;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -144,10 +148,16 @@ class AiVisibilityServiceTest extends TestCase
             'name' => '火山方舟测试模型',
             'model_id' => 'doubao-seed-2-0-lite-260428',
             'api_url' => 'https://ark.cn-beijing.volces.com/api/v3',
-            'max_tokens' => 2048,
         ]);
 
-        $run = app(AiVisibilityService::class)->runDoubaoArkResponses($model, 'GEOFlow', '请搜索 GEOFlow');
+        $this->bindModel(AiVisibilityConfigurationResolver::ARK_MODEL_SETTING_KEY, $model);
+
+        $run = app(AiVisibilityService::class)->runDoubaoArkResponses(
+            SystemAiIdentity::visibilityCollection(),
+            $model,
+            'GEOFlow',
+            '请搜索 GEOFlow',
+        );
 
         $this->assertSame(AiVisibilityRun::STATUS_COMPLETED, $run->status);
         $this->assertSame('豆包返回的可见性回答。', $run->answer_text);
@@ -162,7 +172,6 @@ class AiVisibilityServiceTest extends TestCase
         Http::assertSent(fn ($request): bool => $request->url() === 'https://ark.cn-beijing.volces.com/api/v3/responses'
             && $request->hasHeader('Authorization', 'Bearer test-model-key')
             && $request['model'] === 'doubao-seed-2-0-lite-260428'
-            && $request['max_output_tokens'] === 2048
             && ($request['tools'][0]['type'] ?? null) === 'web_search'
             && ($request['input'][0]['content'][0]['text'] ?? null) === '请搜索 GEOFlow');
     }
@@ -182,14 +191,12 @@ class AiVisibilityServiceTest extends TestCase
             app(AiVisibilityService::class)->runDoubaoSearchCustom($provider, 'GEOFlow');
             $this->fail('Expected Doubao Search Custom failure to throw.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('HTTP 401', $exception->getMessage());
-            $this->assertStringContainsString('bad api key', $exception->getMessage());
+            $this->assertSame('ai_provider_auth_failed', $exception->getMessage());
         }
 
         $run = AiVisibilityRun::query()->firstOrFail();
         $this->assertSame(AiVisibilityRun::STATUS_FAILED, $run->status);
-        $this->assertStringContainsString('HTTP 401', (string) $run->error_message);
-        $this->assertStringContainsString('bad api key', (string) $run->error_message);
+        $this->assertSame('ai_provider_auth_failed', (string) $run->error_message);
         $this->assertSame(0, (int) $provider->fresh()->used_today);
     }
 
@@ -208,12 +215,12 @@ class AiVisibilityServiceTest extends TestCase
             app(AiVisibilityService::class)->runDoubaoSearchCustom($provider, 'GEOFlow');
             $this->fail('Expected exhausted source provider to throw.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('已达到每日调用上限', $exception->getMessage());
+            $this->assertSame('ai_source_provider_quota_exhausted', $exception->getMessage());
         }
 
         $run = AiVisibilityRun::query()->firstOrFail();
         $this->assertSame(AiVisibilityRun::STATUS_FAILED, $run->status);
-        $this->assertStringContainsString('已达到每日调用上限', (string) $run->error_message);
+        $this->assertSame('ai_source_provider_quota_exhausted', (string) $run->error_message);
         Http::assertNothingSent();
     }
 
@@ -253,15 +260,19 @@ class AiVisibilityServiceTest extends TestCase
         ]);
 
         try {
-            app(AiVisibilityService::class)->runDoubaoArkResponses($model, 'GEOFlow');
+            app(AiVisibilityService::class)->runDoubaoArkResponses(
+                SystemAiIdentity::visibilityCollection(),
+                $model,
+                'GEOFlow',
+            );
             $this->fail('Expected inactive model to throw.');
         } catch (RuntimeException $exception) {
-            $this->assertStringContainsString('不可用或已停用', $exception->getMessage());
+            $this->assertSame('ai_config_access_revoked', $exception->getMessage());
         }
 
         $run = AiVisibilityRun::query()->firstOrFail();
         $this->assertSame(AiVisibilityRun::STATUS_FAILED, $run->status);
-        $this->assertStringContainsString('不可用或已停用', (string) $run->error_message);
+        $this->assertSame('ai_config_access_revoked', (string) $run->error_message);
         Http::assertNothingSent();
     }
 
@@ -271,7 +282,14 @@ class AiVisibilityServiceTest extends TestCase
 
         $model = $this->createAiModel();
 
-        $run = app(AiVisibilityService::class)->runDeepSeekAnalysis($model, 'GEOFlow', '请分析 GEOFlow 的 AI 可见性');
+        $this->bindModel(AiVisibilityConfigurationResolver::DEEPSEEK_MODEL_SETTING_KEY, $model);
+
+        $run = app(AiVisibilityService::class)->runDeepSeekAnalysis(
+            SystemAiIdentity::visibilityCollection(),
+            $model,
+            'GEOFlow',
+            '请分析 GEOFlow 的 AI 可见性',
+        );
 
         $this->assertSame(AiVisibilityRun::STATUS_COMPLETED, $run->status);
         $this->assertSame(AiVisibilityRun::PROVIDER_DEEPSEEK_ANALYSIS, $run->provider_type);
@@ -286,18 +304,63 @@ class AiVisibilityServiceTest extends TestCase
         $this->assertSame(1, (int) $model->fresh()->used_today);
     }
 
-    public function test_it_uses_the_models_max_tokens_for_deepseek_analysis_by_default(): void
+    public function test_search_omits_empty_site_filters_saved_in_provider_metadata(): void
     {
-        MarkdownContentWriterAgent::fake(['分析完成'])->preventStrayPrompts();
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://open.feedcoopapi.com/search_api/web_search' => Http::response([
+                'Result' => ['WebResults' => []],
+            ]),
+        ]);
+        $provider = $this->createSearchProvider([
+            'metadata_json' => [
+                'sites' => [],
+                'block_hosts' => [],
+                'need_content' => false,
+                'need_url' => false,
+            ],
+        ]);
 
-        $model = $this->createAiModel(['max_tokens' => 2048]);
+        $run = app(AiVisibilityService::class)->runDoubaoSearchCustom($provider, 'GEOFlow');
 
-        app(AiVisibilityService::class)->runDeepSeekAnalysis($model, 'GEOFlow', '请分析 GEOFlow 的 AI 可见性');
+        $this->assertSame(AiVisibilityRun::STATUS_COMPLETED, $run->status);
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request): bool {
+            $filter = $request->data()['Filter'];
 
-        MarkdownContentWriterAgent::assertPrompted(
-            fn ($prompt): bool => $prompt->agent instanceof MarkdownContentWriterAgent
-                && $prompt->agent->maxTokens === 2048,
-        );
+            return ! array_key_exists('Sites', $filter)
+                && ! array_key_exists('BlockHosts', $filter)
+                && $filter['NeedContent'] === false
+                && $filter['NeedUrl'] === false
+                && $filter['ContentFormats'] === 'Markdown';
+        });
+    }
+
+    public function test_search_preserves_non_empty_site_filters_saved_in_provider_metadata(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://open.feedcoopapi.com/search_api/web_search' => Http::response([
+                'Result' => ['WebResults' => []],
+            ]),
+        ]);
+        $provider = $this->createSearchProvider([
+            'metadata_json' => [
+                'sites' => ['example.com'],
+                'block_hosts' => ['blocked.example.com'],
+            ],
+        ]);
+
+        $run = app(AiVisibilityService::class)->runDoubaoSearchCustom($provider, 'GEOFlow');
+
+        $this->assertSame(AiVisibilityRun::STATUS_COMPLETED, $run->status);
+        Http::assertSentCount(1);
+        Http::assertSent(function ($request): bool {
+            $filter = $request->data()['Filter'];
+
+            return $filter['Sites'] === ['example.com']
+                && $filter['BlockHosts'] === ['blocked.example.com'];
+        });
     }
 
     private function createSearchProvider(array $overrides = []): AiSourceProvider
@@ -316,7 +379,15 @@ class AiVisibilityServiceTest extends TestCase
 
     private function createAiModel(array $overrides = []): AiModel
     {
-        return AiModel::query()->create(array_merge([
+        $owner = Admin::query()->create([
+            'username' => 'visibility-owner-'.uniqid(),
+            'display_name' => 'Visibility Owner',
+            'password' => 'secret',
+            'role' => 'super_admin',
+            'status' => 'active',
+            'ai_config_access_version' => 1,
+        ]);
+        $model = new AiModel(array_merge([
             'name' => 'DeepSeek V4 Flash',
             'version' => 'v4',
             'api_key' => app(ApiKeyCrypto::class)->encrypt('test-model-key'),
@@ -329,5 +400,19 @@ class AiVisibilityServiceTest extends TestCase
             'total_used' => 0,
             'status' => 'active',
         ], $overrides));
+        $model->forceFill([
+            'owner_admin_id' => $owner->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_SYSTEM_ONLY,
+        ])->save();
+
+        return $model;
+    }
+
+    private function bindModel(string $settingKey, AiModel $model): void
+    {
+        SiteSetting::query()->updateOrCreate(
+            ['setting_key' => $settingKey],
+            ['setting_value' => (string) $model->id],
+        );
     }
 }

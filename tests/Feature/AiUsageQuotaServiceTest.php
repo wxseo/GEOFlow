@@ -93,6 +93,20 @@ class AiUsageQuotaServiceTest extends TestCase
         $this->assertSame(1, (int) $model->fresh()->total_used);
     }
 
+    public function test_a_failed_external_model_attempt_still_consumes_the_daily_limit(): void
+    {
+        $model = $this->createModel();
+        $quota = app(AiUsageQuotaService::class);
+        $reservation = $quota->reserveModel($model);
+        $this->assertNotNull($reservation);
+
+        $quota->recordModelAttempt($reservation);
+
+        $this->assertSame(1, (int) $model->fresh()->used_today);
+        $this->assertSame(0, (int) $model->fresh()->total_used);
+        $this->assertNull($quota->reserveModel($model->fresh()));
+    }
+
     public function test_a_rolled_back_success_can_still_release_the_reserved_usage(): void
     {
         $model = $this->createModel();
@@ -114,6 +128,23 @@ class AiUsageQuotaServiceTest extends TestCase
 
         $this->assertSame(0, (int) $model->fresh()->used_today);
         $this->assertSame(0, (int) $model->fresh()->total_used);
+    }
+
+    public function test_a_bulk_reservation_preserves_the_configured_remaining_quota(): void
+    {
+        $model = $this->createModel();
+        $model->forceFill([
+            'daily_limit' => 5,
+            'usage_date' => now()->toDateString(),
+            'used_today' => 3,
+        ])->save();
+        $quota = app(AiUsageQuotaService::class);
+
+        $this->assertNull($quota->reserveModel($model->fresh(), 2));
+        $manualReservation = $quota->reserveModel($model->fresh());
+
+        $this->assertNotNull($manualReservation);
+        $this->assertSame(4, (int) $model->fresh()->used_today);
     }
 
     private function createModel(): AiModel
