@@ -18,22 +18,16 @@
 /www/wwwroot/GEOFlow
 ```
 
-在宝塔“Docker -> 本地镜像 -> 构建镜像”中填写：
+本部署方案不要使用宝塔“Docker -> 本地镜像 -> 构建镜像”面板直接构建。面板选择 Dockerfile 时可能使用错误的构建上下文，导致 `COPY failed`，提示找不到 `docker/php/opcache.ini` 等项目文件。
 
-| 配置 | 值 |
-| --- | --- |
-| 构建目录 | `/www/wwwroot/GEOFlow` |
-| Dockerfile | `/www/wwwroot/GEOFlow/Dockerfile` |
-| 镜像名称 | `geoflow-baota:latest` |
-
-根目录的标准文件 `Dockerfile` 必须与 `composer.json` 位于同一级。请在宝塔文件选择器中直接选择完整路径 `/www/wwwroot/GEOFlow/Dockerfile`，不要手动填写文件名，也不要选择 `docker/Dockerfile.baota`。
-
-等价命令：
+请打开宝塔终端或通过 SSH 登录服务器，进入完整项目的根目录，使用以下命令构建：
 
 ```bash
 cd /www/wwwroot/GEOFlow
-docker build -f Dockerfile -t geoflow-baota:latest .
+docker build -f docker/Dockerfile.baota -t geoflow-baota:latest .
 ```
+
+项目目录以服务器实际路径为准，当前目录中应同时存在 `composer.json` 和 `docker/`。命令末尾的 `.` 表示以整个项目根目录作为构建上下文，不能省略，也不要进入 `docker/` 目录执行。构建成功后，在宝塔“Docker -> 本地镜像”中刷新并选择 `geoflow-baota:latest` 创建容器。
 
 构建过程会从 pgvector 官方 GitHub 压缩包下载固定版本，并校验 SHA-256。下载命令带有自动重试；如果服务器访问 GitHub 偶发中断，直接重新执行构建即可，前面成功的镜像层会复用缓存。
 
