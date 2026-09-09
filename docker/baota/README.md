@@ -23,14 +23,16 @@
 | 配置 | 值 |
 | --- | --- |
 | 构建目录 | `/www/wwwroot/GEOFlow` |
-| Dockerfile | `docker/Dockerfile.baota` |
+| Dockerfile | `/www/wwwroot/GEOFlow/Dockerfile` |
 | 镜像名称 | `geoflow-baota:latest` |
+
+根目录的标准文件 `Dockerfile` 必须与 `composer.json` 位于同一级。请在宝塔文件选择器中直接选择完整路径 `/www/wwwroot/GEOFlow/Dockerfile`，不要手动填写文件名，也不要选择 `docker/Dockerfile.baota`。
 
 等价命令：
 
 ```bash
 cd /www/wwwroot/GEOFlow
-docker build -f docker/Dockerfile.baota -t geoflow-baota:latest .
+docker build -f Dockerfile -t geoflow-baota:latest .
 ```
 
 构建过程会从 pgvector 官方 GitHub 压缩包下载固定版本，并校验 SHA-256。下载命令带有自动重试；如果服务器访问 GitHub 偶发中断，直接重新执行构建即可，前面成功的镜像层会复用缓存。
