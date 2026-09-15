@@ -103,11 +103,17 @@ class ArticleAiQualityResultValidator
             $severity = (string) ($rawIssue['severity'] ?? '');
             $field = (string) ($rawIssue['field'] ?? '');
             $quote = Str::limit(trim((string) ($rawIssue['quote'] ?? '')), 200, '');
-            if (! in_array($code, self::CODES, true)
-                || ! in_array($severity, ['critical', 'high', 'medium', 'low'], true)
-                || ! in_array($field, ['title', 'excerpt', 'content', 'keywords', 'meta_description'], true)
-                || $quote === '') {
-                throw new UnexpectedValueException('ai_quality_issue_value_invalid');
+            if (! in_array($code, self::CODES, true)) {
+                throw new UnexpectedValueException('ai_quality_issue_code_invalid');
+            }
+            if (! in_array($severity, ['critical', 'high', 'medium', 'low'], true)) {
+                throw new UnexpectedValueException('ai_quality_issue_severity_invalid');
+            }
+            if (! in_array($field, ['title', 'excerpt', 'content', 'keywords', 'meta_description'], true)) {
+                throw new UnexpectedValueException('ai_quality_issue_field_invalid');
+            }
+            if ($quote === '') {
+                throw new UnexpectedValueException('ai_quality_issue_quote_invalid');
             }
 
             $factId = trim((string) ($rawIssue['fact_candidate_id'] ?? ''));
@@ -267,15 +273,26 @@ class ArticleAiQualityResultValidator
             $quote = Str::limit(trim((string) ($rawIssue['quote'] ?? '')), 200, '');
             $evidenceStatus = (string) ($rawIssue['evidence_status'] ?? '');
             $confidence = (float) ($rawIssue['confidence'] ?? -1);
-            if (! in_array($code, self::CODES, true)
-                || ! in_array($severity, ['critical', 'high', 'medium', 'low'], true)
-                || ! in_array($field, ['title', 'excerpt', 'content', 'keywords', 'meta_description'], true)
-                || ! in_array($evidenceStatus, ['supported', 'contradicted', 'unverified'], true)
-                || ! is_array($rawIssue['evidence_keys'] ?? null)
-                || $quote === ''
-                || $confidence < 0
-                || $confidence > 1) {
-                throw new UnexpectedValueException('ai_quality_issue_value_invalid');
+            if (! in_array($code, self::CODES, true)) {
+                throw new UnexpectedValueException('ai_quality_issue_code_invalid');
+            }
+            if (! in_array($severity, ['critical', 'high', 'medium', 'low'], true)) {
+                throw new UnexpectedValueException('ai_quality_issue_severity_invalid');
+            }
+            if (! in_array($field, ['title', 'excerpt', 'content', 'keywords', 'meta_description'], true)) {
+                throw new UnexpectedValueException('ai_quality_issue_field_invalid');
+            }
+            if ($quote === '') {
+                throw new UnexpectedValueException('ai_quality_issue_quote_invalid');
+            }
+            if (! in_array($evidenceStatus, ['supported', 'contradicted', 'unverified'], true)) {
+                throw new UnexpectedValueException('ai_quality_issue_evidence_status_invalid');
+            }
+            if (! is_array($rawIssue['evidence_keys'] ?? null)) {
+                throw new UnexpectedValueException('ai_quality_issue_evidence_keys_invalid');
+            }
+            if ($confidence < 0 || $confidence > 1) {
+                throw new UnexpectedValueException('ai_quality_issue_confidence_invalid');
             }
 
             $fact = $factsByHash[$claimHash] ?? null;

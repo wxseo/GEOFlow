@@ -39,6 +39,27 @@ class ArticleAiQualityPromptRendererTest extends TestCase
         ]);
     }
 
+    public function test_it_appends_machine_value_constraints_to_every_quality_prompt(): void
+    {
+        $rendered = (new ArticleAiQualityPromptRenderer)->render('执行质检。', []);
+
+        $this->assertStringContainsString('# 机器值约束', $rendered);
+        $this->assertStringContainsString('issues[].field 只能是 title、excerpt、content、keywords、meta_description', $rendered);
+        $this->assertStringContainsString('issues[].quote 必须是文章中存在的非空逐字原文', $rendered);
+    }
+
+    public function test_it_appends_a_safe_targeted_repair_without_raw_model_output(): void
+    {
+        $rendered = (new ArticleAiQualityPromptRenderer)->appendValidationRepair(
+            '执行质检。',
+            'ai_quality_issue_code_invalid',
+        );
+
+        $this->assertStringContainsString('# 输出修复', $rendered);
+        $this->assertStringContainsString('issues[].code', $rendered);
+        $this->assertStringNotContainsString('unsupported_fact_type', $rendered);
+    }
+
     public function test_default_quality_prompt_does_not_request_ai_generation_disclosure_review(): void
     {
         foreach (['article-quality-cn-v1.txt', 'article-quality-cn-v1-legacy.txt'] as $filename) {

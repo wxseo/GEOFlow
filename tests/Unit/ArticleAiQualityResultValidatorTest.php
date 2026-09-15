@@ -24,6 +24,48 @@ class ArticleAiQualityResultValidatorTest extends TestCase
         ], $this->article(), [], [], $this->rules());
     }
 
+    public function test_it_classifies_invalid_legacy_issue_values_without_exposing_the_value(): void
+    {
+        $validIssue = [
+            'code' => 'content_integrity',
+            'severity' => 'medium',
+            'field' => 'content',
+            'quote' => '标准价格为 1,980 元',
+            'paragraph_index' => 0,
+            'heading' => '',
+            'fact_candidate_id' => '',
+            'article_claim' => '',
+            'evidence_value' => '',
+            'knowledge_refs' => [],
+            'legal_refs' => [],
+            'reason' => '需要核验',
+            'suggestion' => '核验后修改',
+        ];
+
+        foreach ([
+            ['code', 'unsupported_fact_type', 'ai_quality_issue_code_invalid'],
+            ['severity', 'warning', 'ai_quality_issue_severity_invalid'],
+            ['field', 'body', 'ai_quality_issue_field_invalid'],
+            ['quote', '', 'ai_quality_issue_quote_invalid'],
+        ] as [$field, $value, $expectedCode]) {
+            try {
+                (new ArticleAiQualityResultValidator)->validate([
+                    'summary' => '发现问题',
+                    'promotion_context' => 'informational',
+                    'knowledge_coverage' => 'sufficient',
+                    'issues' => [[...$validIssue, $field => $value]],
+                    'uncertainties' => [],
+                ], $this->article(), [], [], $this->rules());
+                $this->fail('Invalid issue value should be rejected.');
+            } catch (UnexpectedValueException $exception) {
+                $this->assertSame($expectedCode, $exception->getMessage());
+                if ($value !== '') {
+                    $this->assertStringNotContainsString((string) $value, $exception->getMessage());
+                }
+            }
+        }
+    }
+
     public function test_it_normalizes_confirmed_high_materiality_data_conflicts_to_critical(): void
     {
         $validated = (new ArticleAiQualityResultValidator)->validate([
@@ -135,7 +177,7 @@ class ArticleAiQualityResultValidatorTest extends TestCase
     public function test_v2_rejects_the_removed_ai_generation_disclosure_code(): void
     {
         $this->expectException(UnexpectedValueException::class);
-        $this->expectExceptionMessage('ai_quality_issue_value_invalid');
+        $this->expectExceptionMessage('ai_quality_issue_code_invalid');
 
         (new ArticleAiQualityResultValidator)->validate([
             'summary' => '发布标识待确认',

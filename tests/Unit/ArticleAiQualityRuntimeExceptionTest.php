@@ -29,6 +29,23 @@ class ArticleAiQualityRuntimeExceptionTest extends TestCase
         $this->assertNull($exception->getPrevious()?->getPrevious());
     }
 
+    public function test_runtime_failure_keeps_only_a_safe_validation_code(): void
+    {
+        $safe = new ArticleAiQualityRuntimeException(
+            'invalid_model_output',
+            false,
+            validationCode: 'ai_quality_issue_code_invalid',
+        );
+        $unsafe = new ArticleAiQualityRuntimeException(
+            'invalid_model_output',
+            false,
+            validationCode: 'api_key=secret-value',
+        );
+
+        $this->assertSame('ai_quality_issue_code_invalid', $safe->validationCode());
+        $this->assertNull($unsafe->validationCode());
+    }
+
     public function test_deepseek_insufficient_balance_is_classified_as_quota_exhausted(): void
     {
         $response = new Response(new PsrResponse(

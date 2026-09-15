@@ -709,12 +709,19 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         $service = app(ArticleAiQualityInspectionService::class);
         $check = $service->createOrReuse($article, dispatch: false);
 
-        $service->markFailed($check, new UnexpectedValueException('ai_quality_issue_value_invalid'));
+        $service->markFailed($check, new ArticleAiQualityRuntimeException(
+            'invalid_model_output',
+            false,
+            new UnexpectedValueException('unsupported_fact_type secret model output'),
+            validationCode: 'ai_quality_issue_code_invalid',
+        ));
 
         $failed = $check->fresh();
         $this->assertSame('failed', $failed->status);
         $this->assertSame('invalid_model_output', $failed->error_code);
         $this->assertSame('invalid_model_output', data_get($failed->execution_meta, 'failure.code'));
+        $this->assertSame('ai_quality_issue_code_invalid', data_get($failed->execution_meta, 'failure.validation_code'));
+        $this->assertStringNotContainsString('unsupported_fact_type', json_encode($failed->execution_meta, JSON_THROW_ON_ERROR));
         $this->assertFalse((bool) data_get($failed->execution_meta, 'failure.retryable'));
         $this->assertNull($failed->score);
     }
@@ -725,9 +732,13 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         {
             public int $calls = 0;
 
+            /** @var list<string> */
+            public array $instructions = [];
+
             public function review(AiModel $model, string $instructions): array
             {
                 $this->calls++;
+                $this->instructions[] = $instructions;
 
                 return [
                     'result' => $this->calls === 1
@@ -773,9 +784,17 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         $completed = $service->process((int) $check->id);
 
         $this->assertSame(2, $reviewer->calls);
+        $this->assertStringNotContainsString('# 输出修复', $reviewer->instructions[0]);
+        $this->assertStringContainsString('# 输出修复', $reviewer->instructions[1]);
+        $this->assertStringContainsString('issues[].code', $reviewer->instructions[1]);
+        $this->assertStringNotContainsString('unsupported_fact_type', $reviewer->instructions[1]);
         $this->assertSame('completed', $completed->status);
         $this->assertSame('chunk', $completed->effective_retrieval_mode);
         $this->assertSame('passed', $completed->decision);
+        $this->assertSame(
+            'ai_quality_issue_code_invalid',
+            data_get($completed->execution_meta, 'model_attempts.0.validation_code'),
+        );
     }
 
     public function test_a_late_full_job_failure_cannot_overwrite_the_new_sampled_phase(): void

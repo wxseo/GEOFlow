@@ -220,7 +220,7 @@ return [
     'ai_quality_sampled_max_ranges' => max(3, min(24, (int) env('GEOFLOW_AI_QUALITY_SAMPLED_MAX_RANGES', 12))),
     'ai_quality_full_online_max_characters' => max(12000, min(200000, (int) env('GEOFLOW_AI_QUALITY_FULL_ONLINE_MAX_CHARACTERS', 60000))),
     'ai_quality_sampled_auto_release_enabled' => filter_var(env('GEOFLOW_AI_QUALITY_SAMPLED_AUTO_RELEASE_ENABLED', true), FILTER_VALIDATE_BOOL),
-    'ai_quality_max_output_tokens' => max(512, min(4096, (int) env('GEOFLOW_AI_QUALITY_MAX_OUTPUT_TOKENS', 2048))),
+    'ai_quality_max_output_tokens' => max(512, min(4096, (int) env('GEOFLOW_AI_QUALITY_MAX_OUTPUT_TOKENS', 4096))),
     'ai_quality_max_model_candidates' => max(1, min(2, (int) env('GEOFLOW_AI_QUALITY_MAX_MODEL_CANDIDATES', 2))),
     'ai_quality_max_evidence' => max(4, min(24, (int) env('GEOFLOW_AI_QUALITY_MAX_EVIDENCE', 12))),
     'ai_quality_max_evidence_characters' => max(2000, min(12000, (int) env('GEOFLOW_AI_QUALITY_MAX_EVIDENCE_CHARACTERS', 6000))),

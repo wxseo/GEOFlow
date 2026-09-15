@@ -35,6 +35,7 @@ use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
+use UnexpectedValueException;
 
 class ArticleAiQualityInspectionService
 {
@@ -1077,6 +1078,12 @@ class ArticleAiQualityInspectionService
                 $modelId = (int) $candidate->id;
                 $candidateOccurrences[$modelId] = (int) ($candidateOccurrences[$modelId] ?? 0) + 1;
                 $candidateOccurrence = $candidateOccurrences[$modelId];
+                $attemptInstructions = array_key_exists($modelId, $invalidOutputRetries)
+                    ? $this->promptRenderer->appendValidationRepair(
+                        $instructions,
+                        $invalidOutputRetries[$modelId],
+                    )
+                    : $instructions;
                 $providerUsageSession = $this->qualityProviderUsageSession(
                     check: $check,
                     model: $candidate,
@@ -1088,7 +1095,7 @@ class ArticleAiQualityInspectionService
                     executionAttempt: $segmentAttempt,
                     candidateOrdinal: $candidateIndex + 1,
                     candidateOccurrence: $candidateOccurrence,
-                    requestPayload: $instructions,
+                    requestPayload: $attemptInstructions,
                 );
                 try {
                     $remainingSeconds = $this->remainingDeadlineSeconds($deadlineAt);
@@ -1114,7 +1121,7 @@ class ArticleAiQualityInspectionService
                             && $providerUsageSession instanceof ArticleAiQualityProviderUsageSession
                             ? $this->reviewer->reviewWithinVersionTrackingProviderAttempts(
                                 $candidate,
-                                $instructions,
+                                $attemptInstructions,
                                 $requestTimeout,
                                 $executionVersion,
                                 $providerUsageSession,
@@ -1122,13 +1129,13 @@ class ArticleAiQualityInspectionService
                             : ($this->reviewer instanceof VersionAwareArticleAiQualityReviewer
                                 ? $this->reviewer->reviewWithinVersion(
                                     $candidate,
-                                    $instructions,
+                                    $attemptInstructions,
                                     $requestTimeout,
                                     $executionVersion,
                                 )
                                 : ($this->reviewer instanceof DeadlineAwareArticleAiQualityReviewer
-                                    ? $this->reviewer->reviewWithin($candidate, $instructions, $requestTimeout)
-                                    : $this->reviewer->review($candidate, $instructions)));
+                                    ? $this->reviewer->reviewWithin($candidate, $attemptInstructions, $requestTimeout)
+                                    : $this->reviewer->review($candidate, $attemptInstructions)));
                     } finally {
                         $modelTotalMs += $this->elapsedMilliseconds($modelStartedAt);
                     }
@@ -1152,14 +1159,23 @@ class ArticleAiQualityInspectionService
                     $raw = $candidateReview['result'];
                     $validationStartedAt = hrtime(true);
                     try {
-                        $validated = $this->resultValidator->validate(
-                            $raw,
-                            $articleSnapshot,
-                            $segmentFacts,
-                            $segmentEvidence,
-                            $rules,
-                            $segmentData,
-                        );
+                        try {
+                            $validated = $this->resultValidator->validate(
+                                $raw,
+                                $articleSnapshot,
+                                $segmentFacts,
+                                $segmentEvidence,
+                                $rules,
+                                $segmentData,
+                            );
+                        } catch (UnexpectedValueException $exception) {
+                            throw new ArticleAiQualityRuntimeException(
+                                'invalid_model_output',
+                                false,
+                                $exception,
+                                validationCode: $this->safeValidationCode($exception->getMessage()),
+                            );
+                        }
                     } finally {
                         $validationMs += $this->elapsedMilliseconds($validationStartedAt);
                     }
@@ -1181,6 +1197,9 @@ class ArticleAiQualityInspectionService
                     }
                     $lastException = $exception;
                     $errorCode = $this->safeErrorCode($exception);
+                    $validationCode = $exception instanceof ArticleAiQualityRuntimeException
+                        ? $exception->validationCode()
+                        : null;
                     $providerUsageSession?->discarded($errorCode);
                     $attempts[] = $this->modelAttempt(
                         $segmentData,
@@ -1188,11 +1207,12 @@ class ArticleAiQualityInspectionService
                         'failed',
                         $errorCode,
                         $this->elapsedMilliseconds($candidateStartedAt),
+                        $validationCode,
                     );
                     if ($errorCode === 'invalid_model_output'
-                        && ! isset($invalidOutputRetries[$modelId])
+                        && ! array_key_exists($modelId, $invalidOutputRetries)
                         && $this->remainingDeadlineSeconds($deadlineAt) > $persistenceReserveSeconds + 10) {
-                        $invalidOutputRetries[$modelId] = true;
+                        $invalidOutputRetries[$modelId] = $validationCode;
                         array_splice($candidateQueue, $candidateIndex + 1, 0, [$candidate]);
                     }
                     if ($errorCode !== 'invalid_model_output'
@@ -3448,7 +3468,7 @@ class ArticleAiQualityInspectionService
 
     /**
      * @param  array<string, mixed>  $segment
-     * @return array{segment_index:int,model_id:int,model_name:string,provider:string,duration_ms:int,outcome:string,error_code:?string}
+     * @return array{segment_index:int,model_id:int,model_name:string,provider:string,duration_ms:int,outcome:string,error_code:?string,validation_code?:string}
      */
     private function modelAttempt(
         array $segment,
@@ -3456,8 +3476,9 @@ class ArticleAiQualityInspectionService
         string $outcome,
         ?string $errorCode,
         int $durationMs,
+        ?string $validationCode = null,
     ): array {
-        return [
+        $attempt = [
             'segment_index' => (int) ($segment['index'] ?? 0),
             'model_id' => (int) $model->id,
             'model_name' => (string) $model->name,
@@ -3466,6 +3487,12 @@ class ArticleAiQualityInspectionService
             'outcome' => $outcome,
             'error_code' => $errorCode,
         ];
+
+        if ($validationCode !== null) {
+            $attempt['validation_code'] = $validationCode;
+        }
+
+        return $attempt;
     }
 
     /**
@@ -3960,7 +3987,7 @@ class ArticleAiQualityInspectionService
         ], true);
     }
 
-    /** @return array{code:string,retryable:bool,http_status:?int,provider_code:?string} */
+    /** @return array{code:string,retryable:bool,http_status:?int,provider_code:?string,validation_code?:string} */
     private function safeFailureContext(Throwable $exception, string $errorCode, bool $retryable): array
     {
         $httpStatus = $exception instanceof ArticleAiQualityRuntimeException
@@ -3974,7 +4001,7 @@ class ArticleAiQualityInspectionService
                 ? $providerCode
                 : null;
 
-        return [
+        $failure = [
             'code' => $errorCode,
             'retryable' => $retryable,
             'http_status' => is_int($httpStatus) && $httpStatus >= 100 && $httpStatus <= 599
@@ -3982,5 +4009,37 @@ class ArticleAiQualityInspectionService
                 : null,
             'provider_code' => $providerCode,
         ];
+
+        if ($errorCode === 'invalid_model_output'
+            && $exception instanceof ArticleAiQualityRuntimeException
+            && $exception->validationCode() !== null) {
+            $failure['validation_code'] = $exception->validationCode();
+        }
+
+        return $failure;
+    }
+
+    private function safeValidationCode(string $validationCode): ?string
+    {
+        return in_array($validationCode, [
+            'ai_quality_result_structure_invalid',
+            'ai_quality_result_unknown_field',
+            'ai_quality_result_missing_field',
+            'ai_quality_reviewed_claim_hashes_invalid',
+            'ai_quality_issue_structure_invalid',
+            'ai_quality_issue_unknown_field',
+            'ai_quality_issue_missing_field',
+            'ai_quality_issue_code_invalid',
+            'ai_quality_issue_severity_invalid',
+            'ai_quality_issue_field_invalid',
+            'ai_quality_issue_quote_invalid',
+            'ai_quality_issue_evidence_status_invalid',
+            'ai_quality_issue_evidence_keys_invalid',
+            'ai_quality_issue_confidence_invalid',
+            'ai_quality_uncertainty_structure_invalid',
+            'ai_quality_uncertainty_unknown_field',
+            'ai_quality_uncertainty_missing_field',
+            'ai_quality_uncertainty_materiality_invalid',
+        ], true) ? $validationCode : null;
     }
 }

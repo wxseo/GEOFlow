@@ -297,7 +297,7 @@ class ArticleAiQualityProgressPresenter
 
     /**
      * @param  array<string, mixed>  $executionMeta
-     * @return array{code:string,title:string,reason:string,next_step:string,retryable:bool,model_attempt_seconds:int,provider_http_status:?int,provider_code:?string}
+     * @return array{code:string,title:string,reason:string,next_step:string,retryable:bool,model_attempt_seconds:int,provider_http_status:?int,provider_code:?string,validation_code:?string}
      */
     private function failureDetails(
         ?string $safeErrorCode,
@@ -315,6 +315,7 @@ class ArticleAiQualityProgressPresenter
         $storedFailure = is_array($executionMeta['failure'] ?? null) ? $executionMeta['failure'] : [];
         $providerHttpStatus = (int) ($storedFailure['http_status'] ?? 0);
         $providerCode = trim((string) ($storedFailure['provider_code'] ?? ''));
+        $validationCode = $this->safeValidationCode($storedFailure['validation_code'] ?? null);
 
         $titleKey = match ($code) {
             'provider_timeout', 'model_timeout', 'inspection_deadline_exceeded', 'inspection_primary_deadline_exceeded' => 'failure_title_timeout',
@@ -341,7 +342,7 @@ class ArticleAiQualityProgressPresenter
             'provider_authentication_failed' => 'failure_reason_authentication',
             'ai_config_access_revoked' => 'failure_reason_config_access_revoked',
             'structured_output_unsupported' => 'failure_reason_structured_output',
-            'invalid_model_output' => 'failure_reason_invalid_output',
+            'invalid_model_output' => $this->invalidOutputReasonKey($validationCode),
             'model_output_truncated' => 'failure_reason_output_truncated',
             'output_budget_exhausted' => 'failure_reason_output_budget',
             'remaining_budget_insufficient' => 'failure_reason_remaining_budget',
@@ -356,7 +357,9 @@ class ArticleAiQualityProgressPresenter
             default => 'failure_reason_generic',
         };
         $nextStepKey = match ($code) {
-            'provider_authentication_failed', 'model_unavailable', 'ai_config_access_revoked', 'structured_output_unsupported', 'invalid_model_output' => 'failure_next_step_configuration',
+            'provider_authentication_failed', 'model_unavailable', 'ai_config_access_revoked', 'structured_output_unsupported' => 'failure_next_step_configuration',
+            'invalid_model_output' => 'failure_next_step_invalid_output',
+            'model_output_truncated', 'output_budget_exhausted' => 'failure_next_step_output_budget',
             'provider_quota_exhausted', 'model_quota_exceeded' => 'failure_next_step_quota',
             'queue_worker_unavailable', 'worker_interrupted' => 'failure_next_step_worker',
             'evidence_retrieval_failed' => 'failure_next_step_evidence',
@@ -382,7 +385,43 @@ class ArticleAiQualityProgressPresenter
             'provider_code' => preg_match('/\A[A-Za-z0-9._:-]{1,80}\z/D', $providerCode) === 1
                 ? $providerCode
                 : null,
+            'validation_code' => $validationCode,
         ];
+    }
+
+    private function invalidOutputReasonKey(?string $validationCode): string
+    {
+        return match ($validationCode) {
+            'ai_quality_issue_code_invalid' => 'failure_reason_invalid_output_issue_code',
+            'ai_quality_issue_severity_invalid' => 'failure_reason_invalid_output_issue_severity',
+            'ai_quality_issue_field_invalid' => 'failure_reason_invalid_output_issue_field',
+            'ai_quality_issue_quote_invalid' => 'failure_reason_invalid_output_issue_quote',
+            default => 'failure_reason_invalid_output',
+        };
+    }
+
+    private function safeValidationCode(mixed $validationCode): ?string
+    {
+        return is_string($validationCode) && in_array($validationCode, [
+            'ai_quality_result_structure_invalid',
+            'ai_quality_result_unknown_field',
+            'ai_quality_result_missing_field',
+            'ai_quality_reviewed_claim_hashes_invalid',
+            'ai_quality_issue_structure_invalid',
+            'ai_quality_issue_unknown_field',
+            'ai_quality_issue_missing_field',
+            'ai_quality_issue_code_invalid',
+            'ai_quality_issue_severity_invalid',
+            'ai_quality_issue_field_invalid',
+            'ai_quality_issue_quote_invalid',
+            'ai_quality_issue_evidence_status_invalid',
+            'ai_quality_issue_evidence_keys_invalid',
+            'ai_quality_issue_confidence_invalid',
+            'ai_quality_uncertainty_structure_invalid',
+            'ai_quality_uncertainty_unknown_field',
+            'ai_quality_uncertainty_missing_field',
+            'ai_quality_uncertainty_materiality_invalid',
+        ], true) ? $validationCode : null;
     }
 
     private function failureAction(?string $safeErrorCode, bool $retryable): string

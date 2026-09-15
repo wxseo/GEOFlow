@@ -177,7 +177,7 @@ final readonly class LaravelArticleAiQualityReviewer implements ProviderAttemptA
 
         try {
             [$provider, $driver, $baseUrl] = $this->runtimeProvider($model);
-            $configuredMaxTokens = (int) config('geoflow.ai_quality_max_output_tokens', 2048);
+            $configuredMaxTokens = (int) config('geoflow.ai_quality_max_output_tokens', 4096);
             $modelMaxTokens = (int) ($model->max_tokens ?: $configuredMaxTokens);
             $maxTokens = max(512, min($configuredMaxTokens, $modelMaxTokens));
             $providerOptions = $this->qualityProviderOptions($model, $driver, $baseUrl);

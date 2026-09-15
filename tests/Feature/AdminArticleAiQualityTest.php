@@ -461,6 +461,61 @@ class AdminArticleAiQualityTest extends TestCase
             ->assertDontSeeText('0/35');
     }
 
+    public function test_invalid_model_output_explains_the_safe_validation_failure(): void
+    {
+        [$admin, $article] = $this->qualityArticle();
+        $check = app(ArticleAiQualityInspectionService::class)->createOrReuse($article, dispatch: false);
+        $check->forceFill([
+            'status' => 'failed',
+            'decision' => 'error',
+            'error_code' => 'invalid_model_output',
+            'execution_meta' => [
+                'retryable_failure' => false,
+                'failure' => [
+                    'code' => 'invalid_model_output',
+                    'retryable' => false,
+                    'validation_code' => 'ai_quality_issue_code_invalid',
+                ],
+            ],
+            'active_dedupe_key' => null,
+            'finished_at' => now(),
+        ])->save();
+
+        $this->actingAs($admin, 'admin')
+            ->getJson(route('admin.articles.ai-quality.status', ['articleId' => $article->id]))
+            ->assertOk()
+            ->assertJsonPath('failure.validation_code', 'ai_quality_issue_code_invalid')
+            ->assertJsonPath('failure.reason', __('admin.articles.ai_quality.failure_reason_invalid_output_issue_code'))
+            ->assertJsonPath('failure.next_step', __('admin.articles.ai_quality.failure_next_step_invalid_output'))
+            ->assertJsonPath('next_action', 'configure_model');
+    }
+
+    public function test_truncated_model_output_points_to_the_output_budget(): void
+    {
+        [$admin, $article] = $this->qualityArticle();
+        $check = app(ArticleAiQualityInspectionService::class)->createOrReuse($article, dispatch: false);
+        $check->forceFill([
+            'status' => 'failed',
+            'decision' => 'error',
+            'error_code' => 'model_output_truncated',
+            'execution_meta' => [
+                'retryable_failure' => true,
+                'failure' => [
+                    'code' => 'model_output_truncated',
+                    'retryable' => true,
+                ],
+            ],
+            'active_dedupe_key' => null,
+            'finished_at' => now(),
+        ])->save();
+
+        $this->actingAs($admin, 'admin')
+            ->getJson(route('admin.articles.ai-quality.status', ['articleId' => $article->id]))
+            ->assertOk()
+            ->assertJsonPath('failure.next_step', __('admin.articles.ai_quality.failure_next_step_output_budget'))
+            ->assertJsonPath('next_action', 'retry');
+    }
+
     public function test_guest_cannot_poll_article_ai_quality_progress(): void
     {
         [, $article] = $this->qualityArticle();

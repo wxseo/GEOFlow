@@ -67,7 +67,28 @@ class ArticleAiQualityPromptRenderer
             throw new InvalidArgumentException('AI quality prompt contains an unresolved variable.');
         }
 
-        return $rendered;
+        return $this->appendMachineValueContract($rendered);
+    }
+
+    public function appendValidationRepair(string $instructions, ?string $validationCode): string
+    {
+        $repair = match ($validationCode) {
+            'ai_quality_issue_code_invalid' => '逐项检查 issues[].code，只能原样使用允许的小写英文问题代码。',
+            'ai_quality_issue_severity_invalid' => '逐项检查 issues[].severity，只能使用 critical、high、medium、low。',
+            'ai_quality_issue_field_invalid' => '逐项检查 issues[].field，只能使用 title、excerpt、content、keywords、meta_description。',
+            'ai_quality_issue_quote_invalid' => '逐项检查 issues[].quote，必须填写文章中存在的非空逐字原文；无法引用原文时不要创建 issue，改写入 uncertainties。',
+            'ai_quality_issue_evidence_status_invalid' => '逐项检查 issues[].evidence_status，只能使用 supported、contradicted、unverified。',
+            'ai_quality_issue_evidence_keys_invalid' => '逐项检查 issues[].evidence_keys，必须是字符串数组，没有依据时使用空数组。',
+            'ai_quality_issue_confidence_invalid' => '逐项检查 issues[].confidence，必须是 0 到 1 之间的数字。',
+            default => '重新逐项核对系统要求的根字段、子字段、枚举值和数据类型，不要增加、缺少或翻译字段。',
+        };
+
+        return $instructions."\n\n# 输出修复\n上一份结果未通过后端结构校验。只修复输出结构，不改变质检判断，也不要复述上一份结果。\n{$repair}\n请重新返回一份完整结果。";
+    }
+
+    private function appendMachineValueContract(string $instructions): string
+    {
+        return $instructions."\n\n# 机器值约束\nissues[].code 只能是 knowledge_contradiction、data_mismatch、unsupported_claim、citation_missing、citation_scope_mismatch、ad_absolute_claim、ad_false_or_misleading、ad_industry_specific、ad_identifiability、content_integrity、source_declared_unverified，禁止翻译、缩写或新增。\nissues[].severity 只能是 critical、high、medium、low。\nissues[].field 只能是 title、excerpt、content、keywords、meta_description。\nissues[].quote 必须是文章中存在的非空逐字原文；无法提供原文时不要创建 issue，改写入 uncertainties。";
     }
 
     private function withoutRemovedDisclosureRule(string $template): string
