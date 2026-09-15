@@ -89,6 +89,14 @@ class ArticleAiQualityQueueConfigurationTest extends TestCase
         }
     }
 
+    public function test_baota_single_container_autostarts_ai_workers(): void
+    {
+        $workers = (string) file_get_contents(dirname(__DIR__, 2).'/docker/baota/ai-workers.conf');
+
+        $this->assertSame(3, substr_count($workers, 'autostart=true'));
+        $this->assertStringNotContainsString('autostart=false', $workers);
+    }
+
     public function test_quality_worker_command_rejects_an_unsafe_timeout_chain_before_starting(): void
     {
         config()->set('geoflow.ai_quality_deadline_seconds', 180);
