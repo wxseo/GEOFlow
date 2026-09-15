@@ -87,6 +87,26 @@ class ArticleAiQualityScorerTest extends TestCase
         $this->assertSame('needs_review', $result['decision']);
     }
 
+    public function test_source_declared_unverified_is_scored_as_data_traceability_issue(): void
+    {
+        $result = (new ArticleAiQualityScorer)->score([
+            'promotion_context' => 'informational',
+            'knowledge_coverage' => 'sufficient',
+            'issues' => [[
+                'code' => 'source_declared_unverified',
+                'severity' => 'medium',
+                'field' => 'content',
+                'quote' => '据行业报告显示',
+                'knowledge_refs' => [],
+            ]],
+            'uncertainties' => [],
+        ], 85, 70);
+
+        $this->assertSame(94, $result['score']);
+        $this->assertSame(19, $result['dimension_scores']['data_traceability']);
+        $this->assertSame('passed', $result['decision']);
+    }
+
     public function test_incomplete_knowledge_coverage_forces_manual_review(): void
     {
         $result = (new ArticleAiQualityScorer)->score([
