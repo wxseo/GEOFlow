@@ -274,6 +274,7 @@ class LaravelArticleAiQualityReviewerTest extends TestCase
             'GLM cached JSON mode' => ['https://open.bigmodel.cn/api/paas/v4', 'glm-4.5-air', ['thinking' => ['type' => 'disabled'], 'response_format' => ['type' => 'json_object']], true],
             'MiniMax cached JSON mode' => ['https://api.minimaxi.com/v1', 'MiniMax-M2.5', ['reasoning_split' => true], true],
             'DeepSeek runtime provider' => ['https://api.deepseek.com/v1', 'deepseek-v4-flash', ['thinking' => ['type' => 'disabled'], 'max_tokens' => 4096]],
+            'Doubao Ark runtime provider' => ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-0-lite-260428', ['thinking' => ['type' => 'disabled']]],
         ];
     }
 

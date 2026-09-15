@@ -2184,7 +2184,7 @@ class ArticleAiQualityInspectionService
         return DB::transaction(function () use ($checkId): bool {
             $check = ArticleAiQualityCheck::query()->whereKey($checkId)->lockForUpdate()->first();
             if (! $check
-                || ! in_array((string) $check->status, ['queued', 'running'], true)
+                || (string) $check->status !== 'queued'
                 || $this->remainingDeadlineSeconds($this->deadlineAt($check)) <= 0
                 || $check->updated_at?->isAfter(now()->subSeconds(
                     (int) config('geoflow.ai_quality_recovery_stale_seconds', 60),
@@ -2192,30 +2192,10 @@ class ArticleAiQualityInspectionService
                 return false;
             }
 
-            if ((string) $check->status === 'running') {
-                ArticleAiQualitySegment::query()
-                    ->where('article_ai_quality_check_id', $checkId)
-                    ->where('status', 'running')
-                    ->update([
-                        'status' => 'failed',
-                        'error_code' => 'worker_interrupted',
-                        'error_message' => '质检进程中断，系统将从当前进度恢复。',
-                        'finished_at' => now(),
-                        'updated_at' => now(),
-                    ]);
-                $check->forceFill([
-                    'status' => 'queued',
-                    'decision' => 'error',
-                    'error_code' => 'worker_interrupted',
-                    'error_message' => '质检进程中断，系统已经重新排队。',
-                    'finished_at' => null,
-                ])->save();
-            } else {
-                $check->forceFill([
-                    'error_code' => 'queue_recovered',
-                    'error_message' => '质检排队等待时间过长，系统已经重新投递。',
-                ])->save();
-            }
+            $check->forceFill([
+                'error_code' => 'queue_recovered',
+                'error_message' => '质检排队等待时间过长，系统已经重新投递。',
+            ])->save();
 
             DB::afterCommit(fn () => $this->dispatchCheck($checkId, 2));
 
@@ -3114,7 +3094,7 @@ class ArticleAiQualityInspectionService
 
             $basisIsCurrent = $this->rolloutEpochMatches($check, $committedEpoch);
             try {
-                $policy = $this->policyResolver->resolve($article);
+                $policy = $this->currentPolicyForCompletedCheck($check, $article);
                 $this->policyResolver->assertExecutable($policy);
                 $currentFingerprint = $this->currentFingerprint(
                     $article,
@@ -3205,9 +3185,11 @@ class ArticleAiQualityInspectionService
         }
 
         $article = $check->article;
-        $policy = $this->policyResolver->resolve($article);
-        $basisChanged = ! (bool) ($policy['required'] ?? false);
+        $policy = [];
+        $basisChanged = true;
         try {
+            $policy = $this->currentPolicyForCompletedCheck($check, $article);
+            $basisChanged = ! (bool) ($policy['required'] ?? false);
             if (! $basisChanged) {
                 $this->policyResolver->assertExecutable($policy);
                 $currentFingerprint = $this->currentFingerprint(
@@ -3255,7 +3237,8 @@ class ArticleAiQualityInspectionService
         }
 
         $this->holdUnpublishedArticleForReview((int) $article->id);
-        if ((bool) ($policy['required'] ?? false)) {
+        if ((bool) ($policy['required'] ?? false)
+            && (string) data_get($check->execution_meta, 'trigger') !== 'quality_basis_changed') {
             try {
                 $this->createOrReuse(
                     $article->fresh(),
@@ -3270,6 +3253,32 @@ class ArticleAiQualityInspectionService
         }
 
         return true;
+    }
+
+    /** @return array<string,mixed> */
+    private function currentPolicyForCompletedCheck(
+        ArticleAiQualityCheck $check,
+        Article $article,
+    ): array {
+        $policy = $this->policyResolver->resolve($article);
+        $executionMeta = is_array($check->execution_meta) ? $check->execution_meta : [];
+        [$aiExecutionSnapshot, $invalidExecutionSnapshot] = $this->qualityExecutionSnapshotForCheck($executionMeta);
+        if ($invalidExecutionSnapshot) {
+            throw new ArticleAiQualityRuntimeException(AiModelAccessException::AI_CONFIG_ACCESS_REVOKED, false);
+        }
+        if ($aiExecutionSnapshot === null) {
+            return $policy;
+        }
+
+        $executionAdmin = $this->aiExecutionAccessGuard->assertPersistedAdminSnapshot(
+            $aiExecutionSnapshot,
+            $check->task_id ? (int) $check->task_id : null,
+        );
+
+        return $this->withFrozenExecutionCandidates(
+            $this->policyResolver->forExecutionAdmin($policy, $executionAdmin),
+            $aiExecutionSnapshot,
+        );
     }
 
     public function retryCompletedWorkflow(ArticleAiQualityCheck|int $check): bool

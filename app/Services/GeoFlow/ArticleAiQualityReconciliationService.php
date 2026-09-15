@@ -18,28 +18,9 @@ class ArticleAiQualityReconciliationService
     {
         $limit = max(1, min(500, $limit));
         $staleBefore = now()->subSeconds((int) config('geoflow.ai_quality_recovery_stale_seconds', 60));
-        $fullRequestStaleBefore = now()->subSeconds(
-            (int) config('geoflow.ai_quality_request_timeout_seconds', 160) + 5,
-        );
-        $sampledRequestStaleBefore = now()->subSeconds(
-            (int) config('geoflow.ai_quality_sampled_request_timeout_seconds', 35) + 5,
-        );
         $staleChecks = ArticleAiQualityCheck::query()
-            ->where(function ($query) use ($staleBefore, $fullRequestStaleBefore, $sampledRequestStaleBefore): void {
-                $query->where(function ($queued) use ($staleBefore): void {
-                    $queued->where('status', 'queued')->where('updated_at', '<=', $staleBefore);
-                })->orWhere(function ($running) use ($fullRequestStaleBefore, $sampledRequestStaleBefore): void {
-                    $running->where('status', 'running')->where(function ($scope) use ($fullRequestStaleBefore, $sampledRequestStaleBefore): void {
-                        $scope->where(function ($full) use ($fullRequestStaleBefore): void {
-                            $full->where('inspection_scope', 'full')
-                                ->where('updated_at', '<=', $fullRequestStaleBefore);
-                        })->orWhere(function ($sampled) use ($sampledRequestStaleBefore): void {
-                            $sampled->where('inspection_scope', 'fallback_sampled')
-                                ->where('updated_at', '<=', $sampledRequestStaleBefore);
-                        });
-                    });
-                });
-            })
+            ->where('status', 'queued')
+            ->where('updated_at', '<=', $staleBefore)
             ->where(function ($query): void {
                 $query->whereNull('deadline_at')->orWhere('deadline_at', '>', now());
             })
@@ -90,7 +71,7 @@ class ArticleAiQualityReconciliationService
 
         $remaining = max(0, $limit - $finalChecks->count());
         $primaryChecks = $remaining === 0 ? collect() : ArticleAiQualityCheck::query()
-            ->whereIn('status', ['queued', 'running'])
+            ->where('status', 'queued')
             ->where('inspection_scope', 'full')
             ->where('primary_deadline_at', '<=', now())
             ->where('deadline_at', '>', now())

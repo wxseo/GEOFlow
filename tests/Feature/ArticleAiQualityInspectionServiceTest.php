@@ -1001,6 +1001,26 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         Queue::assertPushed(ProcessArticleAiQualityJob::class, 1);
     }
 
+    public function test_reconciliation_does_not_start_sampling_while_the_full_provider_call_is_running(): void
+    {
+        Queue::fake();
+        $article = $this->createQualityFixture('running-primary-convergence', needReview: false);
+        $article->task()->update(['ai_quality_timeout_sampling_enabled' => true]);
+        $check = app(ArticleAiQualityInspectionService::class)->createOrReuse($article->fresh(), dispatch: false);
+        $check->forceFill([
+            'status' => 'running',
+            'primary_deadline_at' => now()->subSecond(),
+            'deadline_at' => now()->addSeconds(45),
+        ])->save();
+
+        $result = app(ArticleAiQualityReconciliationService::class)->convergeExpired();
+
+        $this->assertSame(0, $result['degraded']);
+        $this->assertSame('full', $check->fresh()->inspection_scope);
+        $this->assertSame('running', $check->fresh()->status);
+        Queue::assertNothingPushed();
+    }
+
     public function test_expired_running_checks_converge_as_interrupted_when_the_worker_is_missing(): void
     {
         $article = $this->createQualityFixture('running-convergence', needReview: false);
@@ -1017,7 +1037,7 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         $this->assertSame('worker_interrupted', $check->fresh()->error_code);
     }
 
-    public function test_reconciliation_does_not_recover_a_running_provider_call_before_its_request_budget(): void
+    public function test_reconciliation_never_redispatches_a_running_provider_call(): void
     {
         Queue::fake();
         config()->set('geoflow.ai_quality_request_timeout_seconds', 160);
@@ -1040,9 +1060,9 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         $check->newQuery()->whereKey($check->id)->update(['updated_at' => now()->subSeconds(166)]);
         $second = app(ArticleAiQualityReconciliationService::class)->convergeExpired();
 
-        $this->assertSame(1, $second['recovered']);
-        $this->assertSame('queued', $check->fresh()->status);
-        Queue::assertPushed(ProcessArticleAiQualityJob::class, 1);
+        $this->assertSame(0, $second['recovered']);
+        $this->assertSame('running', $check->fresh()->status);
+        Queue::assertNothingPushed();
     }
 
     public function test_a_passing_async_check_preserves_an_explicit_manual_rejection(): void
@@ -2372,6 +2392,60 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
         $this->assertNotSame((int) $check->id, (int) $latest->id);
         $this->assertSame('queued', $latest->status);
         Queue::assertPushed(ProcessArticleAiQualityJob::class, fn (ProcessArticleAiQualityJob $job): bool => $job->checkId === (int) $latest->id);
+    }
+
+    public function test_completed_smart_failover_check_reuses_its_frozen_execution_candidates_for_basis_validation(): void
+    {
+        Queue::fake();
+        $this->bindPassingReviewer();
+        $provider = $this->qualityAdmin('basis-provider', 'super_admin');
+        $executor = $this->qualityAdmin('basis-executor', 'admin', $provider);
+        $peer = $this->qualityAdmin('basis-peer', 'admin');
+        $article = $this->createQualityFixture('basis-frozen-candidates', needReview: true);
+        $primary = $article->task->aiModel;
+        $primary->forceFill([
+            'owner_admin_id' => $executor->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_USER_CONTENT,
+            'model_type' => 'chat',
+            'failover_priority' => 10,
+        ])->save();
+        $shared = $this->qualityModel($provider, 'basis-shared', 1);
+        $this->qualityModel($peer, 'basis-inaccessible', 0);
+        $article->task->forceFill([
+            'model_selection_mode' => 'smart_failover',
+            'model_access_admin_id' => $executor->id,
+            'model_access_admin_role' => 'admin',
+            'model_access_policy_version' => 1,
+        ])->save();
+        $service = app(ArticleAiQualityInspectionService::class);
+        $check = $service->createOrReuse($article->fresh(), dispatch: false);
+
+        $completed = $service->process($check);
+
+        $this->assertSame([$primary->id, $shared->id], data_get($check->execution_meta, 'model_candidate_ids'));
+        $this->assertSame('completed', $completed->fresh()->status);
+        $this->assertSame(1, $article->aiQualityChecks()->where('gate_applied', true)->count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_quality_basis_recheck_is_not_automatically_requeued_twice(): void
+    {
+        Queue::fake();
+        $this->bindPassingReviewer();
+        $article = $this->createQualityFixture('basis-recheck-limit', needReview: true);
+        $service = app(ArticleAiQualityInspectionService::class);
+        $first = $service->createOrReuse($article, dispatch: false);
+        $article->task()->update(['ai_quality_pass_score' => 90]);
+        $service->process($first);
+        $replacement = $article->aiQualityChecks()->latest('id')->firstOrFail();
+        $replacement->forceFill(['input_fingerprint' => hash('sha256', 'forced-drift')])->save();
+
+        $service->process($replacement);
+
+        $this->assertSame(2, $article->aiQualityChecks()->where('gate_applied', true)->count());
+        $this->assertSame('stale', $replacement->fresh()->status);
+        $this->assertSame('quality_basis_changed', $replacement->fresh()->error_code);
+        Queue::assertPushed(ProcessArticleAiQualityJob::class, 1);
     }
 
     public function test_exact_reconciliation_ids_do_not_touch_unrelated_stale_articles(): void
