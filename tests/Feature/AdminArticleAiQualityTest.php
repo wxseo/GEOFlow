@@ -332,6 +332,30 @@ class AdminArticleAiQualityTest extends TestCase
             ->assertDontSee(__('admin.articles.ai_quality.no_issues'));
     }
 
+    public function test_progress_preserves_ai_configuration_access_errors(): void
+    {
+        [$admin, $article] = $this->qualityArticle();
+        $check = app(ArticleAiQualityInspectionService::class)->createOrReuse($article, dispatch: false);
+        $check->forceFill([
+            'status' => 'stale',
+            'decision' => 'error',
+            'error_code' => 'ai_config_access_revoked',
+            'active_dedupe_key' => null,
+            'finished_at' => now(),
+        ])->save();
+
+        $this->actingAs($admin, 'admin')
+            ->getJson(route('admin.articles.ai-quality.status', ['articleId' => $article->id]))
+            ->assertOk()
+            ->assertJsonPath('safe_error_code', 'ai_config_access_revoked')
+            ->assertJsonPath('failure.code', 'ai_config_access_revoked')
+            ->assertJsonPath('failure.reason', __('admin.articles.ai_quality.failure_reason_config_access_revoked', [
+                'seconds' => 0,
+                'deadline' => 180,
+            ]))
+            ->assertJsonPath('next_action', 'configure_model');
+    }
+
     public function test_persisted_non_retryable_retrieval_failure_overrides_legacy_code_inference(): void
     {
         [$admin, $article] = $this->qualityArticle();

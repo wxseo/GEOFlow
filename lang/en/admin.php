@@ -1796,6 +1796,7 @@ return [
             'failure_reason_quota' => 'The model account has insufficient credit, balance, or request quota, so the provider did not run this inspection.',
             'failure_reason_circuit_open' => 'This model failed repeatedly and was temporarily paused to prevent repeated consumption.',
             'failure_reason_authentication' => 'The provider rejected authentication. The API key, endpoint, or model permission is unavailable.',
+            'failure_reason_config_access_revoked' => 'The execution administrator identity or model access configuration was missing, invalid, or changed after the inspection was queued, so the system stopped before making an unauthorized call.',
             'failure_reason_structured_output' => 'This model could not return the required structured inspection result, leaving no valid scoring data.',
             'failure_reason_invalid_output' => 'The model returned content, but required fields were missing, the format was invalid, or backend validation failed.',
             'failure_reason_output_truncated' => 'The model response was truncated, leaving required conclusions, citations, or score fields incomplete.',

@@ -283,6 +283,7 @@ class ArticleAiQualityProgressPresenter
             'model_timeout',
             'model_quota_exceeded',
             'model_unavailable',
+            'ai_config_access_revoked',
             'input_changed',
             'worker_interrupted',
             'queue_worker_unavailable',
@@ -320,7 +321,7 @@ class ArticleAiQualityProgressPresenter
             'input_too_large' => 'failure_title_input_too_large',
             'provider_gateway_error', 'queue_dispatch_failed' => 'failure_title_connection',
             'provider_rate_limited', 'provider_quota_exhausted', 'model_quota_exceeded', 'provider_circuit_open' => 'failure_title_capacity',
-            'provider_authentication_failed', 'model_unavailable' => 'failure_title_configuration',
+            'provider_authentication_failed', 'model_unavailable', 'ai_config_access_revoked' => 'failure_title_configuration',
             'structured_output_unsupported', 'invalid_model_output' => 'failure_title_output',
             'model_output_truncated', 'output_budget_exhausted', 'remaining_budget_insufficient' => 'failure_title_output_budget',
             'evidence_retrieval_failed' => 'failure_title_evidence',
@@ -338,6 +339,7 @@ class ArticleAiQualityProgressPresenter
             'provider_quota_exhausted', 'model_quota_exceeded' => 'failure_reason_quota',
             'provider_circuit_open' => 'failure_reason_circuit_open',
             'provider_authentication_failed' => 'failure_reason_authentication',
+            'ai_config_access_revoked' => 'failure_reason_config_access_revoked',
             'structured_output_unsupported' => 'failure_reason_structured_output',
             'invalid_model_output' => 'failure_reason_invalid_output',
             'model_output_truncated' => 'failure_reason_output_truncated',
@@ -354,7 +356,7 @@ class ArticleAiQualityProgressPresenter
             default => 'failure_reason_generic',
         };
         $nextStepKey = match ($code) {
-            'provider_authentication_failed', 'model_unavailable', 'structured_output_unsupported', 'invalid_model_output' => 'failure_next_step_configuration',
+            'provider_authentication_failed', 'model_unavailable', 'ai_config_access_revoked', 'structured_output_unsupported', 'invalid_model_output' => 'failure_next_step_configuration',
             'provider_quota_exhausted', 'model_quota_exceeded' => 'failure_next_step_quota',
             'queue_worker_unavailable', 'worker_interrupted' => 'failure_next_step_worker',
             'evidence_retrieval_failed' => 'failure_next_step_evidence',
@@ -387,6 +389,7 @@ class ArticleAiQualityProgressPresenter
     {
         $action = match ($safeErrorCode) {
             'provider_authentication_failed',
+            'ai_config_access_revoked',
             'provider_quota_exhausted',
             'model_quota_exceeded',
             'model_unavailable',

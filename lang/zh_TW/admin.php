@@ -1761,6 +1761,7 @@ return [
             'failure_reason_quota' => '模型帳戶的額度、餘額或呼叫配額不足，供應商沒有執行本次質檢。',
             'failure_reason_circuit_open' => '該模型近期連續失敗，系統已暫時停止繼續呼叫以避免重複消耗。',
             'failure_reason_authentication' => '模型供應商拒絕鑑權，當前 API Key、介面地址或模型權限不可用。',
+            'failure_reason_config_access_revoked' => '執行管理員身分或模型存取配置缺失、失效，或在質檢排隊後發生變化，系統為避免無權限呼叫而終止本次檢查。',
             'failure_reason_structured_output' => '當前模型無法按質檢要求返回結構化結果，系統未獲得可校驗的評分資料。',
             'failure_reason_invalid_output' => '模型已返回內容，但結果缺少必要欄位、格式無效或未透過後端校驗。',
             'failure_reason_output_truncated' => '模型返回內容發生截斷，必要的結論、引用或評分欄位不完整。',

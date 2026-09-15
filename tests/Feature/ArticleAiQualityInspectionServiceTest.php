@@ -8,6 +8,7 @@ use App\Ai\Agents\LegacyArticleQualityReviewerAgent;
 use App\Contracts\ArticleAiQualityReviewer;
 use App\Contracts\DeadlineAwareArticleAiQualityReviewer;
 use App\Contracts\VersionAwareArticleAiQualityReviewer;
+use App\Data\Ai\AiExecutionContext;
 use App\Exceptions\AiModelAccessException;
 use App\Exceptions\ArticleAiQualityRuntimeException;
 use App\Jobs\ProcessArticleAiQualityJob;
@@ -2512,6 +2513,53 @@ class ArticleAiQualityInspectionServiceTest extends TestCase
             (int) $replacement->id,
             (int) data_get($article->fresh()->ai_quality_policy_snapshot, 'model_id'),
         );
+    }
+
+    public function test_detached_manual_inspection_freezes_the_requesting_admin_identity(): void
+    {
+        $provider = $this->qualityAdmin('detached-quality-provider', 'super_admin');
+        $executor = $this->qualityAdmin('detached-quality-executor', 'admin', $provider);
+        $article = $this->createQualityFixture('detached-manual-identity', needReview: false);
+        $model = $article->task()->firstOrFail()->aiModel()->firstOrFail();
+        $model->forceFill([
+            'api_key' => app(ApiKeyCrypto::class)->encrypt('detached-manual-secret'),
+            'owner_admin_id' => $provider->id,
+            'access_scope' => AiModel::ACCESS_SCOPE_USER_CONTENT,
+            'model_type' => 'chat',
+        ])->save();
+        $resolver = app(ArticleAiQualityPolicyResolver::class);
+        $policy = $resolver->resolveForManualInspection($article);
+        $article->forceFill([
+            'task_id' => null,
+            'ai_quality_required_at_creation' => true,
+            'ai_quality_policy_snapshot' => $resolver->snapshot($policy),
+        ])->save();
+        ArticleQualityReviewerAgent::fake([$this->passingV2QualityResult()])->preventStrayPrompts();
+        LegacyArticleQualityReviewerAgent::fake([$this->passingV2QualityResult()])->preventStrayPrompts();
+
+        $service = app(ArticleAiQualityInspectionService::class);
+        $check = $service->requestManualInspection(
+            $article->fresh(),
+            dispatch: false,
+            auditAdminId: (int) $executor->id,
+        );
+
+        $this->assertNull($check->task_id);
+        $this->assertSame($executor->id, data_get($check->execution_meta, 'ai_execution.model_access_admin_id'));
+        $this->assertSame('admin', data_get($check->execution_meta, 'ai_execution.model_access_admin_role'));
+        $this->assertSame(1, data_get($check->execution_meta, 'ai_execution.ai_config_access_version'));
+        $this->assertSame(AiExecutionContext::CURRENT_RESOLVER_POLICY_VERSION, data_get($check->execution_meta, 'ai_execution.resolver_policy_version'));
+        $this->assertSame('article', data_get($check->execution_meta, 'ai_execution.source_type'));
+        $this->assertSame($article->id, data_get($check->execution_meta, 'ai_execution.source_id'));
+        $this->assertSame($model->id, data_get($check->execution_meta, 'ai_execution.requested_model_id'));
+        $this->assertSame([$model->id], data_get($check->execution_meta, 'ai_execution.model_candidate_ids'));
+
+        $completed = $service->process($check);
+        $usageEvent = AiModelUsageEvent::query()->sole();
+        $this->assertSame('completed', $completed->status);
+        $this->assertSame($executor->id, $usageEvent->execution_admin_id);
+        $this->assertSame(ArticleAiQualitySegment::class, $usageEvent->source_type);
+        $this->assertSame((string) $check->segments()->sole()->id, $usageEvent->source_id);
     }
 
     public function test_a_queued_manual_check_uses_its_immutable_evidence_policy_when_the_task_changes(): void

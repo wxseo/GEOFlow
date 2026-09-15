@@ -6426,6 +6426,7 @@ return array_replace_recursive($base, [
             'failure_reason_quota' => 'A conta do modelo não possui saldo, crédito ou cota suficiente para executar esta inspeção.',
             'failure_reason_circuit_open' => 'Este modelo apresentou falhas repetidas e foi pausado temporariamente para evitar consumo adicional.',
             'failure_reason_authentication' => 'O provedor recusou a autenticação. A chave de API, o endpoint ou a permissão do modelo está indisponível.',
+            'failure_reason_config_access_revoked' => 'A identidade do administrador de execução ou a configuração de acesso ao modelo estava ausente, inválida ou foi alterada após a inspeção entrar na fila; por isso, o sistema interrompeu a execução antes de uma chamada sem permissão.',
             'failure_reason_structured_output' => 'O modelo não retornou a estrutura obrigatória da inspeção e nenhum dado válido de pontuação foi gerado.',
             'failure_reason_invalid_output' => 'O modelo retornou conteúdo com campos ausentes, formato inválido ou falha na validação do backend.',
             'failure_reason_output_truncated' => 'A resposta do modelo foi truncada e deixou conclusões, referências ou campos de pontuação obrigatórios incompletos.',

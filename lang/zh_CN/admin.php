@@ -1772,6 +1772,7 @@ return [
             'failure_reason_quota' => '模型账户的额度、余额或调用配额不足，供应商没有执行本次质检。',
             'failure_reason_circuit_open' => '该模型近期连续失败，系统已暂时停止继续调用以避免重复消耗。',
             'failure_reason_authentication' => '模型供应商拒绝鉴权，当前 API Key、接口地址或模型权限不可用。',
+            'failure_reason_config_access_revoked' => '执行管理员身份或模型访问配置缺失、失效，或在质检排队后发生变化，系统为避免无权限调用而终止本次检查。',
             'failure_reason_structured_output' => '当前模型无法按质检要求返回结构化结果，系统未获得可校验的评分数据。',
             'failure_reason_invalid_output' => '模型已返回内容，但结果缺少必要字段、格式无效或未通过后端校验。',
             'failure_reason_output_truncated' => '模型返回内容发生截断，必要的结论、引用或评分字段不完整。',

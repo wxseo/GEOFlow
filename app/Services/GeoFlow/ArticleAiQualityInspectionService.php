@@ -118,6 +118,9 @@ class ArticleAiQualityInspectionService
                 $policy['timeout_sampling_enabled'] = false;
             }
             $this->policyResolver->assertExecutable($policy);
+            if ($aiExecutionSnapshot === null && ! $article->task_id && ($auditAdminId ?? 0) > 0) {
+                $aiExecutionSnapshot = $this->manualQualityExecutionSnapshot($article, (int) $auditAdminId);
+            }
             $article->forceFill([
                 'ai_quality_required_at_creation' => true,
                 'ai_quality_policy_snapshot' => $this->policyResolver->snapshot($policy),
@@ -3796,6 +3799,29 @@ class ArticleAiQualityInspectionService
         }
 
         return $snapshot;
+    }
+
+    /** @return array<string,int|string>|null */
+    private function manualQualityExecutionSnapshot(Article $article, int $auditAdminId): ?array
+    {
+        $identity = $this->aiExecutionContextFactory->identityForTaskCreation($auditAdminId);
+        if ($identity === null) {
+            return null;
+        }
+
+        $admin = Admin::query()->whereKey($auditAdminId)->lockForUpdate()->first();
+        if (! $admin instanceof Admin || (string) $admin->status !== 'active') {
+            throw AiModelAccessException::executionAdminInactiveForId($auditAdminId);
+        }
+
+        return [
+            'model_access_admin_id' => (int) $identity['model_access_admin_id'],
+            'model_access_admin_role' => (string) $identity['model_access_admin_role'],
+            'ai_config_access_version' => max(1, (int) $admin->ai_config_access_version),
+            'resolver_policy_version' => (int) $identity['model_access_policy_version'],
+            'source_type' => 'article',
+            'source_id' => (int) $article->id,
+        ];
     }
 
     private function qualityProviderUsageSession(
