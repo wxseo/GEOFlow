@@ -8,18 +8,21 @@ use App\Services\GeoFlow\ArticleAiQualityBackfillGuard;
 use App\Services\GeoFlow\ArticleAiQualityInspectionService;
 use App\Services\GeoFlow\ArticleAiQualityPolicyResolver;
 use App\Services\GeoFlow\ArticleAiQualityReconciliationService;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Throwable;
 
-class ReconcileArticleAiQualityJob implements ShouldQueue
+class ReconcileArticleAiQualityJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
     public int $tries = 3;
 
     public int $timeout = 70;
+
+    public int $uniqueFor = 86400;
 
     /** @var list<int> */
     public array $backoff = [30, 120, 300];
@@ -31,6 +34,25 @@ class ReconcileArticleAiQualityJob implements ShouldQueue
         /** @var list<int> */
         public readonly array $articleIds = [],
     ) {}
+
+    public function uniqueId(): string
+    {
+        $articleIds = array_values(array_unique(array_filter(
+            array_map('intval', $this->articleIds),
+            static fn (int $articleId): bool => $articleId > 0,
+        )));
+        if ($articleIds !== []) {
+            sort($articleIds, SORT_NUMERIC);
+
+            return 'articles:'.hash('sha256', implode(',', $articleIds));
+        }
+
+        return sprintf(
+            'range:%d:%d',
+            max(0, $this->minimumArticleId),
+            max(0, $this->maximumArticleId),
+        );
+    }
 
     public function handle(ArticleAiQualityInspectionService $inspection): void
     {

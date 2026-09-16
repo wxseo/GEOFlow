@@ -3,6 +3,8 @@
 namespace Tests\Unit;
 
 use App\Jobs\ProcessArticleAiQualityJob;
+use App\Jobs\ReconcileArticleAiQualityJob;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Tests\TestCase;
 
 class ArticleAiQualityQueueConfigurationTest extends TestCase
@@ -94,7 +96,23 @@ class ArticleAiQualityQueueConfigurationTest extends TestCase
         $workers = (string) file_get_contents(dirname(__DIR__, 2).'/docker/baota/ai-workers.conf');
 
         $this->assertSame(3, substr_count($workers, 'autostart=true'));
+        $this->assertSame(3, substr_count($workers, 'startsecs=0'));
         $this->assertStringNotContainsString('autostart=false', $workers);
+    }
+
+    public function test_reconciliation_jobs_are_unique_by_scan_scope(): void
+    {
+        $scan = new ReconcileArticleAiQualityJob(25, 0, 100);
+        $sameScanWithAnotherBatchSize = new ReconcileArticleAiQualityJob(25, 0, 25);
+        $nextScan = new ReconcileArticleAiQualityJob(26, 0, 25);
+        $articles = new ReconcileArticleAiQualityJob(0, 0, 100, [9, 3, 9]);
+        $sameArticlesInAnotherOrder = new ReconcileArticleAiQualityJob(0, 0, 25, [3, 9]);
+
+        $this->assertInstanceOf(ShouldBeUnique::class, $scan);
+        $this->assertSame(86400, $scan->uniqueFor);
+        $this->assertSame($scan->uniqueId(), $sameScanWithAnotherBatchSize->uniqueId());
+        $this->assertNotSame($scan->uniqueId(), $nextScan->uniqueId());
+        $this->assertSame($articles->uniqueId(), $sameArticlesInAnotherOrder->uniqueId());
     }
 
     public function test_quality_worker_command_rejects_an_unsafe_timeout_chain_before_starting(): void
